@@ -14,7 +14,6 @@
 /// core.reload(new_config_dict)  # called by SIGHUP handler
 /// core.stop()
 /// ```
-use std::collections::HashMap;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
@@ -47,6 +46,49 @@ fn version() -> &'static str {
 #[pyfunction]
 fn get_pin_states() -> u64 {
     bitmask::current_bitmask()
+}
+
+/// Extract an optional scalar value from a Python dict, returning a Rust
+/// default when the key is missing or the value cannot be converted.
+///
+/// # Parameters
+/// - `dict`    : Python dict to read from
+/// - `key`     : key to look up
+/// - `default` : value returned when the key is missing or extraction fails
+///
+/// # Returns
+/// The extracted Rust value or `default` when the field is absent/invalid.
+fn extract_optional<T>(
+    dict: &Bound<'_, PyDict>,
+    key: &str,
+    default: T,
+) -> PyResult<T>
+where
+    T: for<'py> FromPyObject<'py>,
+{
+    Ok(match dict.get_item(key)? {
+        Some(value) => value.extract::<T>().unwrap_or(default),
+        None => default,
+    })
+}
+
+/// Extract an optional `Vec<T>` from a Python dict, returning an empty vector
+/// when the key is missing or the value cannot be converted.
+///
+/// # Parameters
+/// - `dict`: Python dict to read from
+/// - `key` : key to look up
+///
+/// # Returns
+/// The extracted vector or an empty vector when the field is absent/invalid.
+fn extract_optional_vec<T>(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Vec<T>>
+where
+    T: for<'py> FromPyObject<'py>,
+{
+    Ok(match dict.get_item(key)? {
+        Some(value) => value.extract::<Vec<T>>().unwrap_or_default(),
+        None => Vec::new(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -90,25 +132,13 @@ impl GpioCore {
     /// # Errors
     /// Raises `RuntimeError` if GPIO setup fails (missing module, bad pin, etc.)
     fn start(&mut self, config: &Bound<'_, PyDict>) -> PyResult<()> {
-        let combo_delay: u64 = config
-            .get_item("combo_delay")?.unwrap_or(Python::with_gil(|py| 50u64.into_pyobject(py).unwrap().into_any()))
-            .extract()?;
-        let key_hold_delay: u64 = config
-            .get_item("key_hold_delay")?.unwrap_or(Python::with_gil(|py| 350u64.into_pyobject(py).unwrap().into_any()))
-            .extract()?;
-        let pulldown: bool = config
-            .get_item("pulldown")?.map(|v| v.extract().unwrap_or(false))
-            .unwrap_or(false);
-        let debounce: u32 = config
-            .get_item("debounce")?.map(|v| v.extract().unwrap_or(1u32))
-            .unwrap_or(1);
+        let combo_delay: u64 = extract_optional(config, "combo_delay", 50)?;
+        let key_hold_delay: u64 = extract_optional(config, "key_hold_delay", 350)?;
+        let pulldown: bool = extract_optional(config, "pulldown", false)?;
+        let debounce: u32 = extract_optional(config, "debounce", 1u32)?;
 
-        let pins: Vec<u8> = config
-            .get_item("pins")?.map(|v| v.extract().unwrap_or_default())
-            .unwrap_or_default();
-        let skip_pins: Vec<u8> = config
-            .get_item("skip_pins")?.map(|v| v.extract().unwrap_or_default())
-            .unwrap_or_default();
+        let pins: Vec<u8> = extract_optional_vec(config, "pins")?;
+        let skip_pins: Vec<u8> = extract_optional_vec(config, "skip_pins")?;
 
         // Parse peripheral list
         let peripherals = parse_peripherals(config)?;
@@ -207,11 +237,11 @@ fn parse_peripherals(config: &Bound<'_, PyDict>) -> PyResult<Vec<Peripheral>> {
     for item in list.iter() {
         let d = item.downcast::<PyDict>()?;
 
-        let name: String = d.get_item("name")?.unwrap_or(Python::with_gil(|py| "".into_pyobject(py).unwrap().into_any())).extract()?;
-        let device_index: usize = d.get_item("device_index")?.unwrap_or(Python::with_gil(|py| 0usize.into_pyobject(py).unwrap().into_any())).extract()?;
-        let type_str: String = d.get_item("type")?.unwrap_or(Python::with_gil(|py| "".into_pyobject(py).unwrap().into_any())).extract()?;
-        let command: String = d.get_item("command")?.unwrap_or(Python::with_gil(|py| "".into_pyobject(py).unwrap().into_any())).extract::<String>().unwrap_or_default();
-        let pins: Vec<u8> = d.get_item("pins")?.unwrap_or(Python::with_gil(|py| PyList::empty(py).into_any())).extract()?;
+        let name: String = extract_optional(d, "name", String::new())?;
+        let device_index: usize = extract_optional(d, "device_index", 0usize)?;
+        let type_str: String = extract_optional(d, "type", String::new())?;
+        let command: String = extract_optional(d, "command", String::new())?;
+        let pins: Vec<u8> = extract_optional_vec(d, "pins")?;
 
         // Build pin bitmask from pin list
         let mut pin_mask: u64 = 0;
