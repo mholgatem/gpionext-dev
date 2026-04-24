@@ -59,11 +59,11 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          # --manifest-path points maturin at the crate inside ./refactor/core/
+          # --manifest-path points maturin at the crate
           args: >
             --release
             --strip
-            --manifest-path Cargo.toml
+            --manifest-path ./Cargo.toml
             --out dist
           # manylinux: off = build against the runner's glibc (fine for Pi OS)
           # Switch to manylinux_2_28 if broader distro compat is needed later
