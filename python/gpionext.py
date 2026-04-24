@@ -18,8 +18,12 @@ import sys
 import time
 from datetime import datetime
 
-# Ensure the python/ directory is on the path when run directly
-sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+# Ensure both the python/ package directory and install root are on sys.path
+# so gpionext_core.so can be imported regardless of the current working dir.
+_PYTHON_DIR = os.path.dirname(os.path.realpath(__file__))
+_INSTALL_ROOT = os.path.dirname(_PYTHON_DIR)
+sys.path.insert(0, _PYTHON_DIR)
+sys.path.insert(0, _INSTALL_ROOT)
 
 import config.SQL as SQL
 from config.constants import AVAILABLE_PINS_STRING

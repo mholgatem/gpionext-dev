@@ -22,7 +22,7 @@ SERVICE_NAME="gpionext"
 SERVICE_FILE="/lib/systemd/system/${SERVICE_NAME}.service"
 UDEV_RULE="/etc/udev/rules.d/10-gpionext.rules"
 CLI_BIN="/usr/bin/gpionext"
-GITHUB_REPO="mholgatem/GPIOnext"
+GITHUB_REPO="mholgatem/gpionext-dev"
 
 NONE='\033[00m'
 CYAN='\033[36m'
@@ -248,10 +248,11 @@ if ! $BINARY_OK; then
     echo -e "${RED}WARNING: Rust extension binary not installed.${NONE}"
     echo "  The daemon will not start until the binary is in place."
     echo "  Download from: https://github.com/${GITHUB_REPO}/releases"
+	echo "  Place it at: ${DEST}"
     echo
 fi
 
-read -rp $'\e[35m\e[4mRun the configuration tool now?\e[0m [y/N] ' USER_INPUT
+read -rp $'\e[35m\e[4mRun the configuration tool now?\e[0m [Y/N] ' USER_INPUT
 if [[ "$USER_INPUT" =~ ^[Yy] ]]; then
     gpionext config
 fi

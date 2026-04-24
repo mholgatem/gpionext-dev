@@ -20,7 +20,11 @@ import time
 import sys
 import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+_UI_DIR = os.path.dirname(os.path.realpath(__file__))
+_PYTHON_DIR = os.path.dirname(_UI_DIR)
+_INSTALL_ROOT = os.path.dirname(_PYTHON_DIR)
+sys.path.insert(0, _PYTHON_DIR)
+sys.path.insert(0, _INSTALL_ROOT)
 
 import config.SQL as SQL
 
