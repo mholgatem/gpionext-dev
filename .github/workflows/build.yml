@@ -54,6 +54,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.apt_packages }}
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       # maturin-action handles Python discovery, cross-linker setup, and .so naming
       - name: Build with maturin
         uses: PyO3/maturin-action@v1
