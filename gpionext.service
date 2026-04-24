@@ -1,0 +1,29 @@
+[Unit]
+Description=GPIOnext GPIO to HID daemon
+After=network.target
+
+[Service]
+Type=simple
+User=root
+# WorkingDirectory updated from /home/pi/gpionext to /opt/gpionext
+WorkingDirectory=/opt/gpionext
+
+# Uses the project virtualenv Python so evdev and gpionext_core.so are on the path.
+# -u = unbuffered stdout/stderr so journalctl shows output immediately.
+ExecStart=/opt/gpionext/venv/bin/python3 -u /opt/gpionext/python/gpionext.py --debounce 1 --combo_delay 50
+
+# SIGHUP triggers hot-reload (re-reads SQLite config without restarting).
+# Used by 'gpionext reload' and 'gpionext set *' commands.
+ExecReload=/bin/kill -HUP $MAINPID
+KillSignal=SIGTERM
+
+# Restart automatically on crash (e.g. GPIO module not loaded)
+Restart=on-failure
+RestartSec=2
+
+# Capture stdout/stderr in journald
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
