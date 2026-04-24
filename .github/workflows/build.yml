@@ -1,13 +1,13 @@
 name: Build Rust Extension
 
-# Triggers:
-#   - Push of a version tag (v*) → builds + attaches binaries to the GitHub Release
-#   - Manual dispatch → useful for testing CI without tagging
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -18,86 +18,61 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Raspberry Pi 2B / 3 / Zero 2 W  (32-bit ARMv7)
           - target: armv7-unknown-linux-gnueabihf
             arch: armv7l
-            # Phase 2: add libgpiod-dev:armhf to apt_packages
-            apt_packages: ""
-
-          # Raspberry Pi 3 / 4 / 5 running 64-bit OS
           - target: aarch64-unknown-linux-gnu
             arch: aarch64
-            # Phase 2: add libgpiod-dev:arm64 to apt_packages
-            apt_packages: ""
-
-          # x86_64 for development / testing on desktop Linux
           - target: x86_64-unknown-linux-gnu
             arch: x86_64
-            # Phase 2: add libgpiod-dev to apt_packages
-            apt_packages: ""
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Rust stable toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      # Install any C cross-compilation dependencies (populated in Phase 2)
-      - name: Install system dependencies
-        if: matrix.apt_packages != ''
-        run: |
-          sudo dpkg --add-architecture armhf
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update
-          sudo apt-get install -y ${{ matrix.apt_packages }}
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      # maturin-action handles Python discovery, cross-linker setup, and .so naming
-      - name: Build with maturin
+      - name: Build wheel with maturin
         uses: PyO3/maturin-action@v1
         with:
+          command: build
           target: ${{ matrix.target }}
-          # --manifest-path points maturin at the crate inside ./core/
+          manylinux: off
           args: >
             --release
             --strip
             --manifest-path core/Cargo.toml
             --out dist
-            -i python3
-          # manylinux: off = build against the runner's glibc (fine for Pi OS)
-          # Switch to manylinux_2_28 if broader distro compat is needed later
-          manylinux: off
-          # zig linker handles cross-compilation without a full sysroot
-          # Remove this line if C deps (libgpiod) require a proper cross sysroot
-          before-script-linux: ""
+            --zig
 
-      # maturin names the file like gpionext_core-0.1.0-cp311-...so
-      # Rename to a simple arch-stamped name for install.sh to fetch
-      - name: Rename output binary
+      - name: Extract and rename .so
         run: |
-          find dist -name "*.so" | head -1 | \
-            xargs -I{} mv {} dist/gpionext_core-${{ matrix.arch }}.so
-          echo "Built: $(ls dist/)"
+          set -euo pipefail
 
-      # Upload .so as a build artifact (available whether or not this is a tag push)
+          mkdir -p extracted
+
+          WHL="$(find dist -name '*.whl' | head -n 1)"
+          echo "Wheel: $WHL"
+
+          python3 -m zipfile -e "$WHL" extracted
+
+          SO="$(find extracted -name '*.so' | head -n 1)"
+          echo "Shared object: $SO"
+
+          cp "$SO" "dist/gpionext_core-${{ matrix.arch }}.so"
+
+          ls -lh dist/
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: gpionext_core-${{ matrix.arch }}
           path: dist/gpionext_core-${{ matrix.arch }}.so
 
-      # Attach binary to the GitHub Release (only on tag push)
       - name: Attach binary to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: dist/gpionext_core-${{ matrix.arch }}.so
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
