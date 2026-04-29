@@ -91,23 +91,35 @@ impl GpioCore {
     /// Raises `RuntimeError` if GPIO setup fails (missing module, bad pin, etc.)
     fn start(&mut self, config: &Bound<'_, PyDict>) -> PyResult<()> {
         let combo_delay: u64 = config
-            .get_item("combo_delay")?.unwrap_or(Python::with_gil(|py| 50u64.into_pyobject(py).unwrap().into_any()))
-            .extract()?;
+            .get_item("combo_delay")?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or(50);
         let key_hold_delay: u64 = config
-            .get_item("key_hold_delay")?.unwrap_or(Python::with_gil(|py| 350u64.into_pyobject(py).unwrap().into_any()))
-            .extract()?;
+            .get_item("key_hold_delay")?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or(350);
         let pulldown: bool = config
-            .get_item("pulldown")?.map(|v| v.extract().unwrap_or(false))
+            .get_item("pulldown")?
+            .map(|v| v.extract())
+            .transpose()?
             .unwrap_or(false);
         let debounce: u32 = config
-            .get_item("debounce")?.map(|v| v.extract().unwrap_or(1u32))
+            .get_item("debounce")?
+            .map(|v| v.extract())
+            .transpose()?
             .unwrap_or(1);
 
         let pins: Vec<u8> = config
-            .get_item("pins")?.map(|v| v.extract().unwrap_or_default())
+            .get_item("pins")?
+            .map(|v| v.extract())
+            .transpose()?
             .unwrap_or_default();
         let skip_pins: Vec<u8> = config
-            .get_item("skip_pins")?.map(|v| v.extract().unwrap_or_default())
+            .get_item("skip_pins")?
+            .map(|v| v.extract())
+            .transpose()?
             .unwrap_or_default();
 
         // Parse peripheral list
@@ -207,11 +219,26 @@ fn parse_peripherals(config: &Bound<'_, PyDict>) -> PyResult<Vec<Peripheral>> {
     for item in list.iter() {
         let d = item.downcast::<PyDict>()?;
 
-        let name: String = d.get_item("name")?.unwrap_or(Python::with_gil(|py| "".into_pyobject(py).unwrap().into_any())).extract()?;
-        let device_index: usize = d.get_item("device_index")?.unwrap_or(Python::with_gil(|py| 0usize.into_pyobject(py).unwrap().into_any())).extract()?;
-        let type_str: String = d.get_item("type")?.unwrap_or(Python::with_gil(|py| "".into_pyobject(py).unwrap().into_any())).extract()?;
-        let command: String = d.get_item("command")?.unwrap_or(Python::with_gil(|py| "".into_pyobject(py).unwrap().into_any())).extract::<String>().unwrap_or_default();
-        let pins: Vec<u8> = d.get_item("pins")?.unwrap_or(Python::with_gil(|py| PyList::empty(py).into_any())).extract()?;
+        let name: String = d.get_item("name")?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or_default();
+        let device_index: usize = d.get_item("device_index")?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or(0);
+        let type_str: String = d.get_item("type")?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or_default();
+        let command: String = d.get_item("command")?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or_default();
+        let pins: Vec<u8> = d.get_item("pins")?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or_default();
 
         // Build pin bitmask from pin list
         let mut pin_mask: u64 = 0;
