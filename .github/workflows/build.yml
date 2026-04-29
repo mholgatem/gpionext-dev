@@ -67,7 +67,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          # --manifest-path points maturin at the crate inside ./refactor/core/
+          # --manifest-path points maturin at the crate inside ./core/
           args: >
             --release
             --strip
@@ -77,20 +77,18 @@ jobs:
             -i python3.11
             --features gpio
           # manylinux: off = build against the runner's glibc (fine for Pi OS)
-          # Switch to manylinux_2_28 if broader distro compat is needed later
           manylinux: off
-          # gpiocdev is pure Rust (no C library) so zig linker and no sysroot needed
           before-script-linux: ""
 
-      # maturin names the file like gpionext_core-0.1.0-cp311-...so
-      # Rename to a simple arch-stamped name for install.sh to fetch
-      - name: Rename output binary
+      # maturin builds a wheel (.whl). We extract the .so and rename it for install.sh
+      - name: Extract and rename output binary
         run: |
-          find dist -name "*.so" | head -1 | \
-            xargs -I{} mv {} dist/gpionext_core-${{ matrix.arch }}.so
+          unzip dist/*.whl -d dist/tmp
+          find dist/tmp -name "*.so" -exec mv {} dist/gpionext_core-${{ matrix.arch }}.so \;
+          rm -rf dist/tmp dist/*.whl
           echo "Built: $(ls dist/)"
 
-      # Upload .so as a build artifact (available whether or not this is a tag push)
+      # Upload .so as a build artifact
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

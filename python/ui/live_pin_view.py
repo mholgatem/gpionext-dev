@@ -121,7 +121,18 @@ class LivePinView:
         curses.init_pair(1, curses.COLOR_WHITE,  -1)
         curses.init_pair(2, curses.COLOR_GREEN,  -1)  # pressed pin
         curses.init_pair(3, curses.COLOR_CYAN,   -1)  # header
-        curses.init_pair(4, curses.COLOR_BLACK + 8, -1)  # bright black = dim
+
+        # Safe fallback for "dim" color (bright black / grey)
+        # If terminal supports 16+ colors, use color 8. Otherwise fallback to white.
+        dim_color = curses.COLOR_WHITE
+        if curses.COLORS > 8:
+            dim_color = 8  # Bright Black / Grey
+
+        curses.init_pair(4, dim_color, -1)
+
+        dim_attr = curses.color_pair(4)
+        if curses.COLORS <= 8:
+            dim_attr |= curses.A_DIM
 
         while True:
             key = stdscr.getch()
@@ -129,39 +140,40 @@ class LivePinView:
                 break
 
             bitmask = gpionext_core.get_pin_states() if _HAS_CORE else 0
-            self._draw(stdscr, bitmask)
+            self._draw(stdscr, bitmask, dim_attr)
             time.sleep(self.REFRESH_INTERVAL)
 
-    def _draw(self, stdscr: curses.window, bitmask: int) -> None:
+    def _draw(self, stdscr: curses.window, bitmask: int, dim_attr: int) -> None:
         """
         Redraw the entire screen with current pin states.
 
         Parameters:
-            stdscr  : curses window
-            bitmask : current pressed-pin bitmask from gpionext_core
+            stdscr   : curses window
+            bitmask  : current pressed-pin bitmask from gpionext_core
+            dim_attr : attributes for dim/decorative elements
         """
         stdscr.erase()
         max_y, max_x = stdscr.getmaxyx()
 
         # Header
-        title = ' GPIOnext — Live Pin Monitor  (q = exit) '
+        title = ' GPIOnext \u2014 Live Pin Monitor  (q = exit) '
         stdscr.addstr(0, 0, title.center(max_x), curses.color_pair(3) | curses.A_BOLD)
-        stdscr.addstr(1, 0, '─' * max_x, curses.color_pair(4))
+        stdscr.addstr(1, 0, '\u2500' * max_x, dim_attr)
 
         # Column headers
         col_headers = f"  {'PIN':>4}   {'ST':2}  {'MAPPED TO':<40}"
         stdscr.addstr(2, 0, col_headers, curses.color_pair(3))
-        stdscr.addstr(3, 0, '─' * max_x, curses.color_pair(4))
+        stdscr.addstr(3, 0, '\u2500' * max_x, dim_attr)
 
         row_y = 4
         for pin in self.pins:
             if row_y >= max_y - 2:
                 stdscr.addstr(row_y, 0, '  ... (resize terminal to see more pins)',
-                              curses.color_pair(4))
+                              dim_attr)
                 break
 
             pressed = bool(bitmask & (1 << pin))
-            state_char = '\u25cf' if pressed else '\u25cb'  # ● or ○
+            state_char = '\u25cf' if pressed else '\u25cb'  # \u25cf or \u25cb
             label = self.labels.get(pin, 'unmapped')
 
             # Truncate label to available width
@@ -174,7 +186,7 @@ class LivePinView:
             if pressed:
                 attr = curses.color_pair(2) | curses.A_BOLD
             elif label == 'unmapped':
-                attr = curses.color_pair(4)
+                attr = dim_attr
             else:
                 attr = curses.color_pair(1)
 
@@ -187,7 +199,7 @@ class LivePinView:
         # Footer
         footer = ' Press q or ESC to return to the menu '
         try:
-            stdscr.addstr(max_y - 1, 0, footer.center(max_x), curses.color_pair(4))
+            stdscr.addstr(max_y - 1, 0, footer.center(max_x), dim_attr)
         except curses.error:
             pass
 
