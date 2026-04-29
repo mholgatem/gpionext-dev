@@ -216,10 +216,11 @@ impl GpioLoop {
 
                 // --- Spawn event thread (running is cloned, not moved) ---
                 let running_clone = running.clone();
+                let is_pulldown = config.pulldown;
                 thread = Some(
                     std::thread::Builder::new()
                         .name("gpionext-gpio".into())
-                        .spawn(move || event_loop(request, running_clone))
+                        .spawn(move || event_loop(request, running_clone, is_pulldown))
                         .expect("failed to spawn GPIO event thread"),
                 );
             } else {
@@ -286,7 +287,7 @@ fn find_gpio_chip() -> Option<String> {
 /// - `request` : open gpiocdev line request (owns the file descriptor)
 /// - `running` : stop flag; loop exits when this is `false`
 #[cfg(feature = "gpio")]
-fn event_loop(request: gpiocdev::Request, running: Arc<AtomicBool>) {
+fn event_loop(request: gpiocdev::Request, running: Arc<AtomicBool>, is_pulldown: bool) {
     use gpiocdev::line::EdgeKind;
 
     loop {
@@ -300,14 +301,20 @@ fn event_loop(request: gpiocdev::Request, running: Arc<AtomicBool>) {
                     Ok(event) => {
                         let bcm = event.offset;
                         if let Some(board) = bcm_to_board(bcm) {
-                            match event.kind {
-                                EdgeKind::Rising => {
-                                    crate::bitmask::set_pin(board);
-                                    crate::bitmask::on_pin_press(board);
-                                }
-                                EdgeKind::Falling => {
-                                    crate::bitmask::on_pin_release(board);
-                                }
+                            // Map edge to press/release based on pull resistor logic
+                            // Pull-Up (default):   Falling = Pressed (Low),  Rising = Released (High)
+                            // Pull-Down:           Rising  = Pressed (High), Falling = Released (Low)
+                            let is_press = if is_pulldown {
+                                event.kind == EdgeKind::Rising
+                            } else {
+                                event.kind == EdgeKind::Falling
+                            };
+
+                            if is_press {
+                                crate::bitmask::set_pin(board);
+                                crate::bitmask::on_pin_press(board);
+                            } else {
+                                crate::bitmask::on_pin_release(board);
                             }
                         }
                     }

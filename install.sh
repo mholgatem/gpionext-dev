@@ -8,8 +8,9 @@
 #   Raspberry Pi OS Bookworm (32-bit and 64-bit, Debian 12)
 #   Pi models: 2B, 3B, 3B+, 4B, 5
 #
-# Usage: bash install.sh [-noupdate]
-#   -noupdate  Skip 'apt-get update' (faster reinstall)
+# Usage: bash install.sh [-noupdate] [--update-core]
+#   -noupdate     Skip 'apt-get update' (faster reinstall)
+#   --update-core  Only update the Rust binary from GitHub (requires existing install)
 
 set -euo pipefail
 
@@ -33,6 +34,20 @@ UNDERLINE='\033[4m'
 BOLD='\033[1m'
 
 # ---------------------------------------------------------------------------
+# Flags
+# ---------------------------------------------------------------------------
+
+SKIP_APT_UPDATE=false
+ONLY_UPDATE_CORE=false
+
+for arg in "$@"; do
+    case $arg in
+        -noupdate)      SKIP_APT_UPDATE=true ;;
+        --update-core)  ONLY_UPDATE_CORE=true ;;
+    esac
+done
+
+# ---------------------------------------------------------------------------
 # Root check
 # ---------------------------------------------------------------------------
 
@@ -40,6 +55,11 @@ if [ "$(whoami)" != "root" ]; then
     echo "Switching to root user..."
     sudo bash "$0" "$@"
     exit $?
+fi
+
+if $ONLY_UPDATE_CORE && [ ! -d "$INSTALL_PATH" ]; then
+    echo -e "${RED}ERROR: --update-core requires an existing installation at ${INSTALL_PATH}${NONE}"
+    exit 1
 fi
 
 SCRIPT=$(readlink -f "$0")
@@ -65,6 +85,40 @@ esac
 echo -e "${CYAN}${BOLD}GPIOnext Installer${NONE}"
 echo -e "Architecture: ${FUSCHIA}$ARCH${NONE} → binary: gpionext_core-${RUST_ARCH}.so"
 echo
+
+# ---------------------------------------------------------------------------
+# Core Update Only Path
+# ---------------------------------------------------------------------------
+
+if $ONLY_UPDATE_CORE; then
+    echo -e "${CYAN}${BOLD}Updating Rust extension binary only...${NONE}"
+    
+    BINARY_NAME="gpionext_core-${RUST_ARCH}.so"
+    DEST="${INSTALL_PATH}/${BINARY_NAME}"
+
+    LATEST_TAG=$(curl -sf "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" \
+        | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/') || LATEST_TAG=""
+
+    if [ -z "$LATEST_TAG" ]; then
+        echo -e "${RED}Could not determine latest release tag.${NONE}"
+        exit 1
+    fi
+
+    BINARY_URL="https://github.com/${GITHUB_REPO}/releases/download/${LATEST_TAG}/${BINARY_NAME}"
+    echo "Downloading $BINARY_URL..."
+    if curl -sfL "$BINARY_URL" -o "$DEST"; then
+        chmod 755 "$DEST"
+        ln -sf "$DEST" "${INSTALL_PATH}/gpionext_core.so"
+        echo -e "${GREEN}Binary updated successfully to ${LATEST_TAG}.${NONE}"
+        
+        echo -e "Restarting ${CYAN}${SERVICE_NAME}${NONE} service..."
+        systemctl restart "$SERVICE_NAME"
+        exit 0
+    else
+        echo -e "${RED}Binary download failed.${NONE}"
+        exit 1
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # Debian version detection
