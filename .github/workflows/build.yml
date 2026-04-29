@@ -74,7 +74,7 @@ jobs:
             --manifest-path core/Cargo.toml
             --out dist
             --zig
-            -i python3
+            -i python3.11
             --features gpio
           # manylinux: off = build against the runner's glibc (fine for Pi OS)
           # Switch to manylinux_2_28 if broader distro compat is needed later
