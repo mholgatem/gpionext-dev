@@ -8,10 +8,15 @@ use i2cdev::linux::LinuxI2CDevice;
 #[cfg(feature = "i2c")]
 use i2cdev::core::I2CDevice;
 
+#[cfg(feature = "i2c")]
 use std::sync::Arc;
+#[cfg(feature = "i2c")]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "i2c")]
 use std::time::Duration;
+#[cfg(feature = "i2c")]
 use crate::bitmask;
+#[cfg(feature = "i2c")]
 use crate::gpio::{board_to_bcm, find_gpio_chip};
 
 // ---------------------------------------------------------------------------
@@ -139,19 +144,19 @@ impl Mcp23017 {
         Ok(Mcp23017 { bus, address, int_pin, pins })
     }
 
-    pub fn scan(bus: u8) -> Vec<u8> {
-        let mut found = Vec::new();
+    pub fn scan(_bus: u8) -> Vec<u8> {
+        let mut _found = Vec::new();
         #[cfg(feature = "i2c")]
         {
             for addr in 0x20u8..=0x27 {
-                if let Ok(mut dev) = LinuxI2CDevice::new(format!("/dev/i2c-{bus}"), addr as u16) {
+                if let Ok(mut dev) = LinuxI2CDevice::new(format!("/dev/i2c-{_bus}"), addr as u16) {
                     if dev.smbus_read_byte_data(MCP_IODIRA).is_ok() {
-                        found.push(addr);
+                        _found.push(addr);
                     }
                 }
             }
         }
-        found
+        _found
     }
 
     #[cfg(feature = "i2c")]
@@ -281,19 +286,19 @@ impl Ads1115 {
         Ok(Ads1115 { bus, address, channels })
     }
 
-    pub fn scan(bus: u8) -> Vec<u8> {
-        let mut found = Vec::new();
+    pub fn scan(_bus: u8) -> Vec<u8> {
+        let mut _found = Vec::new();
         #[cfg(feature = "i2c")]
         {
             for addr in 0x48u8..=0x4B {
-                if let Ok(mut dev) = LinuxI2CDevice::new(format!("/dev/i2c-{bus}"), addr as u16) {
+                if let Ok(mut dev) = LinuxI2CDevice::new(format!("/dev/i2c-{_bus}"), addr as u16) {
                     if dev.smbus_read_word_data(ADS_REG_CONFIG).is_ok() {
-                        found.push(addr);
+                        _found.push(addr);
                     }
                 }
             }
         }
-        found
+        _found
     }
 
     #[cfg(feature = "i2c")]

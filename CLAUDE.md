@@ -148,21 +148,21 @@ refactor/
 └── python/
     ├── gpionext.py               # Daemon: HAT detect → config dict → GpioCore
     ├── config/
-    │   ├── constants.py          # Pin lists (no RPi.GPIO), i2c pin ID helpers
-    │   ├── SQL.py                # SQLite CRUD + buildConfigDict() + JSON import/export
-    │   └── hat_detect.py         # Detect audio HAT from /boot/config.txt + EEPROM
+    │   ├── constants.py          # Pin lists, i2c pin ID helpers
+    │   ├── SQL.py                # SQLite CRUD + I2C tables + JSON import/export
+    │   ├── hat_detect.py         # Detect audio HAT from /boot/config.txt + EEPROM
+    │   └── baudrate.py           # Configure RPi I2C baudrate (100kHz / 400kHz)
     └── ui/
-        ├── config_manager.py     # Interactive config tool (all new features)
-        ├── live_pin_view.py      # Curses full-screen real-time pin monitor
+        ├── config_manager.py     # Interactive config tool (I2C/Hardware menu)
+        ├── live_pin_view.py      # Curses full-screen 192-bit real-time pin monitor
         ├── hat_presets.py        # Adafruit/Pimoroni/NES preset pin maps
         └── cursesmenu/           # Carried over from reference (unmodified)
 ```
 
-## Pending Implementation (Phase 2/3 stubs in Rust)
+## Implementation Status
 
-These are documented in the source but not yet activated:
-- `gpio.rs`: libgpiod line requests + event poll loop (needs `--features gpio` + `libgpiod` crate)
-- `uinput.rs`: actual `/dev/uinput` open + ioctl writes (needs `libc` crate)
-- `i2c.rs`: MCP23017 register writes + ADS1115 reads (needs `i2cdev` crate + `--features i2c`)
+- [x] **Phase 1**: Core Scaffolding (Rust extension + Python wrapper)
+- [x] **Phase 2**: GPIO and uinput (gpiocdev loop + libc writes)
+- [x] **Phase 3**: I2C Support (MCP23017, ADS1115, IRQ pins, Baudrate)
+- [ ] **Final Verification**: Live testing on Raspberry Pi hardware
 
-When adding these, uncomment the dependency in `core/Cargo.toml`, update `apt_packages` in the CI matrix, and fill in the `#[cfg(feature = "...")]` blocks in each file.

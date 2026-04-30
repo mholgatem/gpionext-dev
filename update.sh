@@ -13,7 +13,7 @@ if [ "$(whoami)" != "root" ]; then
 fi
 
 INSTALL_PATH="/opt/gpionext"
-GITHUB_REPO="mholgatem/GPIOnext"
+GITHUB_REPO="mholgatem/gpionext-dev"
 
 CYAN='\033[36m'
 GREEN='\033[32m'

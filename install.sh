@@ -248,13 +248,24 @@ udevadm control --reload-rules
 udevadm trigger
 
 # ---------------------------------------------------------------------------
+# I2C activation (Raspberry Pi only)
+# ---------------------------------------------------------------------------
+
+if [ -f /usr/bin/raspi-config ]; then
+    echo -e "${CYAN}${UNDERLINE}Activating I2C interface...${NONE}"
+    raspi-config nonint do_i2c 0 || true
+fi
+
+# ---------------------------------------------------------------------------
 # Kernel modules
 # ---------------------------------------------------------------------------
 
 grep -qxF 'uinput' /etc/modules || echo 'uinput' >> /etc/modules
 grep -qxF 'evdev'  /etc/modules || echo 'evdev'  >> /etc/modules
+grep -qxF 'i2c-dev' /etc/modules || echo 'i2c-dev' >> /etc/modules
 modprobe uinput 2>/dev/null || true
 modprobe evdev  2>/dev/null || true
+modprobe i2c-dev 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # systemd service

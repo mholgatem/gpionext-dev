@@ -382,7 +382,7 @@ pub fn build_config(
             if p.pin_mask[i] == 0 { continue; }
             for bit in 0u8..64 {
                 if p.pin_mask[i] & (1u64 << bit) != 0 {
-                    pin_map.entry(i * 64 + bit).or_default().push(p.clone());
+                    pin_map.entry((i as u8 * 64) + bit).or_default().push(p.clone());
                 }
             }
         }

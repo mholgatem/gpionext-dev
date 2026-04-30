@@ -68,6 +68,21 @@ def init(db_path: str | None = None) -> None:
         '  pins    TEXT'
         ')'
     )
+    _cursor.execute(
+        'CREATE TABLE IF NOT EXISTS I2C_MCP23017 ('
+        '  id       INTEGER PRIMARY KEY AUTOINCREMENT,'
+        '  bus      INTEGER DEFAULT 1,'
+        '  address  INTEGER DEFAULT 32,'
+        '  int_pin  INTEGER'
+        ')'
+    )
+    _cursor.execute(
+        'CREATE TABLE IF NOT EXISTS I2C_ADS1115 ('
+        '  id       INTEGER PRIMARY KEY AUTOINCREMENT,'
+        '  bus      INTEGER DEFAULT 1,'
+        '  address  INTEGER DEFAULT 72'
+        ')'
+    )
     _conn.commit()
 
 
@@ -279,11 +294,22 @@ def buildConfigDict(args) -> dict:
         # pins stored as '11' (single) or '(11, 13)' (combo/tuple)
         raw_pins = row['pins']
         try:
-            pins_val = eval(raw_pins)
-            if isinstance(pins_val, int):
-                pins = [pins_val]
+            # Handle potential i2c pin strings like "i2c-0x20-A0"
+            if isinstance(raw_pins, str) and raw_pins.startswith('i2c-'):
+                pins = [_map_i2c_pin_string_to_vpin(raw_pins)]
             else:
-                pins = list(pins_val)
+                pins_val = eval(raw_pins)
+                if isinstance(pins_val, int):
+                    pins = [pins_val]
+                elif isinstance(pins_val, tuple):
+                    pins = []
+                    for p in pins_val:
+                        if isinstance(p, str) and p.startswith('i2c-'):
+                            pins.append(_map_i2c_pin_string_to_vpin(p))
+                        else:
+                            pins.append(int(p))
+                else:
+                    pins = list(pins_val)
         except Exception:
             pins = []
 
@@ -304,8 +330,14 @@ def buildConfigDict(args) -> dict:
     except ImportError:
         pass
 
+    # Load I2C configurations
+    mcp_list = _cursor.execute('SELECT bus, address, int_pin FROM I2C_MCP23017').fetchall()
+    ads_list = _cursor.execute('SELECT bus, address FROM I2C_ADS1115').fetchall()
+
     return {
         'peripherals':     peripherals,
+        'i2c_mcp23017':    mcp_list,
+        'i2c_ads1115':     ads_list,
         'combo_delay':     int(args.combo_delay),
         'key_hold_delay':  int(getattr(args, 'key_hold_delay', 350)),
         'debounce':        int(args.debounce),
@@ -313,6 +345,24 @@ def buildConfigDict(args) -> dict:
         'pins':            list(args.pins),
         'skip_pins':       skip_pins,
     }
+
+def _map_i2c_pin_string_to_vpin(s: str) -> int:
+    """
+    Map a string like 'i2c-0x20-A0' to its virtual BOARD pin number.
+    MCP23017: 64 + (addr-0x20)*16 + (0 if A else 8) + bit
+    ADS1115: 128 + (addr-0x48)*4 + channel
+    """
+    parts = s.split('-')
+    addr = int(parts[1], 16)
+    if parts[2].startswith('ch'):
+        # ADS1115
+        channel = int(parts[2][2:])
+        return 128 + (addr - 0x48) * 4 + channel
+    else:
+        # MCP23017
+        port = 0 if parts[2][0] == 'A' else 8
+        bit = int(parts[2][1:])
+        return 64 + (addr - 0x20) * 16 + port + bit
 
 
 # ---------------------------------------------------------------------------
