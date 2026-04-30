@@ -15,6 +15,7 @@
 /// core.stop()
 /// ```
 use std::collections::HashMap;
+use std::sync::Arc;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
@@ -23,7 +24,7 @@ mod gpio;
 mod i2c;
 mod uinput;
 
-use bitmask::{EventType, Peripheral, build_config, init_pool, set_config};
+use bitmask::{EventType, Peripheral, build_config, init_pool, set_config, set_config_arc};
 
 // ---------------------------------------------------------------------------
 // Module-level functions
@@ -129,7 +130,12 @@ impl GpioCore {
         init_pool(8);
 
         // Install config into global state
-        set_config(build_config(peripherals, combo_delay, key_hold_delay));
+        let config_obj = build_config(peripherals, combo_delay, key_hold_delay);
+        let config_arc = Arc::new(config_obj);
+        set_config_arc(config_arc.clone());
+
+        // Initialise uinput devices
+        uinput::open_all(&config_arc);
 
         // Start GPIO event loop (stub until libgpiod feature enabled)
         let gpio_config = gpio::GpioConfig { pins, pulldown, debounce_ms: debounce };

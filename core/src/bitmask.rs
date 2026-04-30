@@ -166,14 +166,19 @@ pub fn init_pool(num_threads: usize) -> Arc<ThreadPool> {
     }).clone()
 }
 
+/// Install a new (or reloaded) config from an existing Arc.
+pub fn set_config_arc(config: Arc<Config>) {
+    let lock = CONFIG.get_or_init(|| RwLock::new(None));
+    *lock.write() = Some(config);
+}
+
 /// Install a new (or reloaded) config. Call this from `GpioCore::start()`
 /// and `GpioCore::reload()`.
 ///
 /// # Parameters
 /// - `config`: fully constructed `Config` from the Python-side SQLite load
 pub fn set_config(config: Config) {
-    let lock = CONFIG.get_or_init(|| RwLock::new(None));
-    *lock.write() = Some(Arc::new(config));
+    set_config_arc(Arc::new(config));
 }
 
 // ---------------------------------------------------------------------------

@@ -30,6 +30,7 @@ gpiocdev = { version = "0.8", optional = true }
 # i2cdev: Linux i2c-dev ioctl wrapper for MCP23017 and ADS1115.
 # Feature-gated: enable with --features i2c
 # i2cdev = { version = "0.6", optional = true }
+libc = "0.2"
 
 [features]
 default = []
