@@ -62,6 +62,17 @@ struct uinput_abs_setup {
 #[cfg(target_os = "linux")]
 const UI_ABS_SETUP: libc::c_ulong = 0x401c5504;
 
+#[cfg(target_os = "linux")]
+const EV_SYN: u16 = 0x00;
+#[cfg(target_os = "linux")]
+const EV_KEY: u16 = 0x01;
+#[cfg(target_os = "linux")]
+const EV_ABS: u16 = 0x03;
+#[cfg(target_os = "linux")]
+const EV_REP: u16 = 0x14;
+#[cfg(target_os = "linux")]
+const SYN_REPORT: u16 = 0;
+
 // ---------------------------------------------------------------------------
 // Global state
 // ---------------------------------------------------------------------------
@@ -94,7 +105,7 @@ pub fn open_all(config: &Arc<crate::bitmask::Config>) {
         if *fd != -1 {
             #[cfg(target_os = "linux")]
             unsafe {
-                libc::ioctl(*fd, UI_DEV_DESTROY);
+                libc::ioctl(*fd, UI_DEV_DESTROY as libc::c_int);
                 libc::close(*fd);
             }
             *fd = -1;
@@ -156,12 +167,12 @@ pub fn dispatch_press(peripheral: &Arc<Peripheral>, key_hold_delay_ms: u64) {
 
         match &peripheral.event_type {
             EventType::Button { evdev_code } => {
-                write_event(fd, libc::EV_KEY as u16, *evdev_code as u16, 1);
+                write_event(fd, EV_KEY, *evdev_code as u16, 1);
                 write_sync(fd);
                 wait_for_release(peripheral);
             }
             EventType::Key { evdev_code } => {
-                write_event(fd, libc::EV_KEY as u16, *evdev_code as u16, 1);
+                write_event(fd, EV_KEY, *evdev_code as u16, 1);
                 write_sync(fd);
 
                 // Start hold task
@@ -175,7 +186,7 @@ pub fn dispatch_press(peripheral: &Arc<Peripheral>, key_hold_delay_ms: u64) {
                         while p.hold_generation.load(Ordering::Relaxed) == gen
                             && p.is_pressed.load(Ordering::Relaxed)
                         {
-                            write_event(fd, libc::EV_KEY as u16, code as u16, 2);
+                            write_event(fd, EV_KEY, code as u16, 2);
                             write_sync(fd);
                             std::thread::sleep(Duration::from_millis(33));
                         }
@@ -186,8 +197,7 @@ pub fn dispatch_press(peripheral: &Arc<Peripheral>, key_hold_delay_ms: u64) {
                 write_event(fd, *evdev_type as u16, *evdev_code as u16, *press_value);
                 write_sync(fd);
                 wait_for_release(peripheral);
-            }
-            EventType::Command { bash } => {
+            }            EventType::Command { bash } => {
                 let cmd = bash.clone();
                 if let Some(pool) = crate::bitmask::get_pool() {
                     pool.spawn(move || {
@@ -221,11 +231,11 @@ pub fn dispatch_release(peripheral: &Arc<Peripheral>) {
         let fd = device_fd(peripheral.device_index);
         match &peripheral.event_type {
             EventType::Button { evdev_code } => {
-                write_event(fd, libc::EV_KEY as u16, *evdev_code as u16, 0);
+                write_event(fd, EV_KEY, *evdev_code as u16, 0);
                 write_sync(fd);
             }
             EventType::Key { evdev_code } => {
-                write_event(fd, libc::EV_KEY as u16, *evdev_code as u16, 0);
+                write_event(fd, EV_KEY, *evdev_code as u16, 0);
                 write_sync(fd);
             }
             EventType::Axis { evdev_type, evdev_code, .. } => {
@@ -244,7 +254,7 @@ pub fn close_all() {
         if *fd != -1 {
             #[cfg(target_os = "linux")]
             unsafe {
-                libc::ioctl(*fd, UI_DEV_DESTROY);
+                libc::ioctl(*fd, UI_DEV_DESTROY as libc::c_int);
                 libc::close(*fd);
             }
             *fd = -1;
@@ -264,17 +274,17 @@ fn create_joypad(index: usize, peripherals: &[Arc<Peripheral>]) -> RawFd {
     };
 
     unsafe {
-        libc::ioctl(fd, UI_SET_EVBIT, libc::EV_KEY as libc::c_int);
-        libc::ioctl(fd, UI_SET_EVBIT, libc::EV_ABS as libc::c_int);
+        libc::ioctl(fd, UI_SET_EVBIT as libc::c_int, EV_KEY as libc::c_int);
+        libc::ioctl(fd, UI_SET_EVBIT as libc::c_int, EV_ABS as libc::c_int);
 
         for p in peripherals {
             match &p.event_type {
                 EventType::Button { evdev_code } => {
-                    libc::ioctl(fd, UI_SET_KEYBIT, *evdev_code as libc::c_int);
+                    libc::ioctl(fd, UI_SET_KEYBIT as libc::c_int, *evdev_code as libc::c_int);
                 }
                 EventType::Axis { evdev_type, evdev_code, .. } => {
-                    if *evdev_type == libc::EV_ABS as u32 {
-                        libc::ioctl(fd, UI_SET_ABSBIT, *evdev_code as libc::c_int);
+                    if *evdev_type == EV_ABS as u32 {
+                        libc::ioctl(fd, UI_SET_ABSBIT as libc::c_int, *evdev_code as libc::c_int);
                         let abs_setup = uinput_abs_setup {
                             code: *evdev_code as u16,
                             absinfo: libc::input_absinfo {
@@ -286,9 +296,9 @@ fn create_joypad(index: usize, peripherals: &[Arc<Peripheral>]) -> RawFd {
                                 resolution: 0,
                             },
                         };
-                        libc::ioctl(fd, UI_ABS_SETUP, &abs_setup);
-                    } else if *evdev_type == libc::EV_KEY as u32 {
-                        libc::ioctl(fd, UI_SET_KEYBIT, *evdev_code as libc::c_int);
+                        libc::ioctl(fd, UI_ABS_SETUP as libc::c_int, &abs_setup);
+                    } else if *evdev_type == EV_KEY as u32 {
+                        libc::ioctl(fd, UI_SET_KEYBIT as libc::c_int, *evdev_code as libc::c_int);
                     }
                 }
                 _ => {}
@@ -311,8 +321,8 @@ fn create_joypad(index: usize, peripherals: &[Arc<Peripheral>]) -> RawFd {
             setup.name[i] = b as libc::c_char;
         }
 
-        libc::ioctl(fd, UI_DEV_SETUP, &setup);
-        libc::ioctl(fd, UI_DEV_CREATE);
+        libc::ioctl(fd, UI_DEV_SETUP as libc::c_int, &setup);
+        libc::ioctl(fd, UI_DEV_CREATE as libc::c_int);
     }
 
     fd
@@ -326,12 +336,12 @@ fn create_keyboard(peripherals: &[Arc<Peripheral>]) -> RawFd {
     };
 
     unsafe {
-        libc::ioctl(fd, UI_SET_EVBIT, libc::EV_KEY as libc::c_int);
-        libc::ioctl(fd, UI_SET_EVBIT, libc::EV_REP as libc::c_int);
+        libc::ioctl(fd, UI_SET_EVBIT as libc::c_int, EV_KEY as libc::c_int);
+        libc::ioctl(fd, UI_SET_EVBIT as libc::c_int, EV_REP as libc::c_int);
 
         for p in peripherals {
             if let EventType::Key { evdev_code } = &p.event_type {
-                libc::ioctl(fd, UI_SET_KEYBIT, *evdev_code as libc::c_int);
+                libc::ioctl(fd, UI_SET_KEYBIT as libc::c_int, *evdev_code as libc::c_int);
             }
         }
 
@@ -351,8 +361,8 @@ fn create_keyboard(peripherals: &[Arc<Peripheral>]) -> RawFd {
             setup.name[i] = b as libc::c_char;
         }
 
-        libc::ioctl(fd, UI_DEV_SETUP, &setup);
-        libc::ioctl(fd, UI_DEV_CREATE);
+        libc::ioctl(fd, UI_DEV_SETUP as libc::c_int, &setup);
+        libc::ioctl(fd, UI_DEV_CREATE as libc::c_int);
     }
 
     fd
@@ -395,7 +405,7 @@ fn write_event(fd: RawFd, type_: u16, code: u16, value: i32) {
 
 #[cfg(target_os = "linux")]
 fn write_sync(fd: RawFd) {
-    write_event(fd, libc::EV_SYN as u16, libc::SYN_REPORT as u16, 0);
+    write_event(fd, EV_SYN, SYN_REPORT, 0);
 }
 
 fn wait_for_release(peripheral: &Arc<Peripheral>) {
