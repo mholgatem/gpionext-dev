@@ -174,6 +174,8 @@ class ConfigurationManager:
                 sys.exit(0)
             elif choice == 'live_pins':
                 self._show_live_pins()
+            elif choice == 'hardware_settings':
+                self._show_hardware_settings()
             elif choice == 'preset':
                 self._load_preset()
             elif choice == 'export':
@@ -218,6 +220,7 @@ class ConfigurationManager:
             ('8', 'Clear a device',        'clear_device'),
             ('─', '─' * 30,        None),
             ('9', 'Live pin monitor',      'live_pins'),
+            ('h', 'Hardware settings',     'hardware_settings'),
             ('p', 'Load HAT preset',       'preset'),
             ('e', 'Export config (JSON)',  'export'),
             ('i', 'Import config (JSON)',  'import'),
@@ -262,7 +265,12 @@ class ConfigurationManager:
         last_bitmask: int = 0
 
         while True:
-            bitmask = gpionext_core.get_pin_states() if _HAS_CORE else 0
+            if _HAS_CORE:
+                res = gpionext_core.get_pin_states()
+                bitmask = res[0] | (res[1] << 64) | (res[2] << 128)
+            else:
+                bitmask = 0
+
             time.sleep(self.POLL_INTERVAL)
 
             if bitmask == 0:
@@ -278,14 +286,19 @@ class ConfigurationManager:
 
             if hold_start and (time.time() - hold_start) >= self.HOLD_SECONDS:
                 # Convert bitmask to pin list
-                return [bit for bit in range(64) if bitmask & (1 << bit)]
+                return [bit for bit in range(192) if bitmask & (1 << bit)]
 
     def wait_for_release(self) -> None:
         """Block until all GPIO pins are released. Prompts after 3 seconds."""
         start = time.time()
         prompted = False
         while True:
-            bitmask = gpionext_core.get_pin_states() if _HAS_CORE else 0
+            if _HAS_CORE:
+                res = gpionext_core.get_pin_states()
+                bitmask = res[0] | (res[1] << 64) | (res[2] << 128)
+            else:
+                bitmask = 0
+
             if bitmask == 0:
                 return
             time.sleep(self.POLL_INTERVAL)
@@ -505,15 +518,141 @@ class ConfigurationManager:
             SQL.deleteDevice(name)
             print(pcolor('green', f'  {name} cleared.'))
 
+    def _show_hardware_settings(self) -> None:
+        """Menu for I2C baudrate and chip management."""
+        import config.baudrate as baudrate
+        while True:
+            print(f'\n{pcolor("bold", "Hardware Settings")}')
+            print(f'  {pcolor("cyan", "1")}. I2C Baudrate (Current: {baudrate.get_current_baudrate()} Hz)')
+            print(f'  {pcolor("cyan", "2")}. Manage MCP23017 chips')
+            print(f'  {pcolor("cyan", "3")}. Manage ADS1115 chips')
+            print(f'  {pcolor("cyan", "b")}. Back')
+
+            choice = input('\n  Select: ').strip().lower()
+            if choice == 'b':
+                break
+            elif choice == '1':
+                self._configure_baudrate()
+            elif choice == '2':
+                self._manage_mcp23017()
+            elif choice == '3':
+                self._manage_ads1115()
+
+    def _configure_baudrate(self) -> None:
+        import config.baudrate as baudrate
+        print(f'\n{pcolor("bold", "Configure I2C Baudrate")}')
+        print(baudrate.ADVANCED_WARNING)
+        print(f'\n  {pcolor("cyan", "1")}. Default (100,000 Hz)')
+        print(f'  {pcolor("cyan", "2")}. Fast    (400,000 Hz)')
+        print(f'  {pcolor("cyan", "b")}. Back')
+
+        choice = input('\n  Select: ').strip().lower()
+        if choice == '1':
+            if baudrate.set_baudrate(100000):
+                print(pcolor('green', '  Baudrate set to 100kHz. Reboot required.'))
+        elif choice == '2':
+            if baudrate.set_baudrate(400000):
+                print(pcolor('green', '  Baudrate set to 400kHz. Reboot required.'))
+
+    def _manage_mcp23017(self) -> None:
+        while True:
+            print(f'\n{pcolor("bold", "Manage MCP23017 Chips")}')
+            rows = SQL._cursor.execute('SELECT * FROM I2C_MCP23017').fetchall()
+            for i, row in enumerate(rows, 1):
+                int_pin = row['int_pin'] if row['int_pin'] else "None"
+                print(f'  {pcolor("cyan", str(i))}. Bus {row["bus"]}, Addr 0x{row["address"]:02X}, Int Pin: {int_pin}')
+            
+            print(f'\n  {pcolor("cyan", "a")}. Add new chip')
+            print(f'  {pcolor("cyan", "d")}. Delete a chip')
+            print(f'  {pcolor("cyan", "b")}. Back')
+
+            choice = input('\n  Select: ').strip().lower()
+            if choice == 'b':
+                break
+            elif choice == 'a':
+                try:
+                    bus_str = input('  I2C Bus [1]: ').strip() or '1'
+                    bus = int(bus_str)
+                    addr_str = input('  I2C Address (hex) [0x20]: ').strip() or '0x20'
+                    addr = int(addr_str, 16)
+                    int_pin_str = input('  Interrupt Pin (BOARD) [None]: ').strip()
+                    int_pin = int(int_pin_str) if int_pin_str else None
+                    SQL._cursor.execute('INSERT INTO I2C_MCP23017 (bus, address, int_pin) VALUES (?,?,?)', (bus, addr, int_pin))
+                    SQL._conn.commit()
+                    print(pcolor('green', '  Chip added.'))
+                except ValueError:
+                    print(pcolor('red', '  Invalid input.'))
+            elif choice == 'd' and rows:
+                try:
+                    idx = int(input('  Delete chip #: ').strip())
+                    row = rows[idx - 1]
+                    SQL._cursor.execute('DELETE FROM I2C_MCP23017 WHERE id = ?', (row['id'],))
+                    SQL._conn.commit()
+                    print(pcolor('green', '  Deleted.'))
+                except (ValueError, IndexError):
+                    print(pcolor('red', '  Invalid selection.'))
+
+    def _manage_ads1115(self) -> None:
+        while True:
+            print(f'\n{pcolor("bold", "Manage ADS1115 Chips")}')
+            rows = SQL._cursor.execute('SELECT * FROM I2C_ADS1115').fetchall()
+            for i, row in enumerate(rows, 1):
+                print(f'  {pcolor("cyan", str(i))}. Bus {row["bus"]}, Addr 0x{row["address"]:02X}')
+            
+            print(f'\n  {pcolor("cyan", "a")}. Add new chip')
+            print(f'  {pcolor("cyan", "d")}. Delete a chip')
+            print(f'  {pcolor("cyan", "b")}. Back')
+
+            choice = input('\n  Select: ').strip().lower()
+            if choice == 'b':
+                break
+            elif choice == 'a':
+                try:
+                    bus_str = input('  I2C Bus [1]: ').strip() or '1'
+                    bus = int(bus_str)
+                    addr_str = input('  I2C Address (hex) [0x48]: ').strip() or '0x48'
+                    addr = int(addr_str, 16)
+                    SQL._cursor.execute('INSERT INTO I2C_ADS1115 (bus, address) VALUES (?,?)', (bus, addr))
+                    SQL._conn.commit()
+                    print(pcolor('green', '  Chip added.'))
+                except ValueError:
+                    print(pcolor('red', '  Invalid input.'))
+            elif choice == 'd' and rows:
+                try:
+                    idx = int(input('  Delete chip #: ').strip())
+                    row = rows[idx - 1]
+                    SQL._cursor.execute('DELETE FROM I2C_ADS1115 WHERE id = ?', (row['id'],))
+                    SQL._conn.commit()
+                    print(pcolor('green', '  Deleted.'))
+                except (ValueError, IndexError):
+                    print(pcolor('red', '  Invalid selection.'))
+
     # ---------------------------------------------------------------------------
     # Live pin monitor
     # ---------------------------------------------------------------------------
 
     def _show_live_pins(self) -> None:
-        """Launch the full-screen live pin monitor."""
+        """Launch the full-screen live pin monitor. Includes I2C pins if configured."""
         from ui.live_pin_view import LivePinView
         db_rows = SQL.getAllRows()
-        with LivePinView(list(self.args.pins), db_rows) as view:
+        
+        # Start with physical BOARD pins
+        pins_to_show = list(self.args.pins)
+        
+        # Add configured I2C pins
+        mcp_chips = SQL._cursor.execute('SELECT address FROM I2C_MCP23017').fetchall()
+        for mcp in mcp_chips:
+            addr = mcp['address']
+            base_vpin = 64 + (addr - 0x20) * 16
+            pins_to_show.extend(range(base_vpin, base_vpin + 16))
+            
+        ads_chips = SQL._cursor.execute('SELECT address FROM I2C_ADS1115').fetchall()
+        for ads in ads_chips:
+            addr = ads['address']
+            base_vpin = 128 + (addr - 0x48) * 4
+            pins_to_show.extend(range(base_vpin, base_vpin + 4))
+
+        with LivePinView(pins_to_show, db_rows) as view:
             view.run()
 
     # ---------------------------------------------------------------------------
@@ -655,20 +794,30 @@ class ConfigurationManager:
         args.pins = [int(x.strip()) for x in args.pins.split(',') if x.strip()]
         return args
 
-    @staticmethod
-    def _pins_to_str(pins: list[int]) -> str:
+    def _pins_to_str(self, pins: list[int]) -> str:
         """
         Convert a pin list to the canonical DB storage format.
-
-        Parameters:
-            pins (list[int]): list of BOARD pin numbers
-
-        Returns:
-            str: single int string '11' for one pin, tuple string '(11, 13)' for combos
+        Now supports virtual I2C pins.
         """
-        if len(pins) == 1:
-            return str(pins[0])
-        return str(tuple(pins))
+        out = []
+        for p in pins:
+            if p >= 128:
+                # ADS1115
+                addr = 0x48 + (p - 128) // 4
+                ch = (p - 128) % 4
+                out.append(f"i2c-0x{addr:02X}-ch{ch}")
+            elif p >= 64:
+                # MCP23017
+                addr = 0x20 + (p - 64) // 16
+                port = 'A' if ((p - 64) % 16) < 8 else 'B'
+                bit = (p - 64) % 8
+                out.append(f"i2c-0x{addr:02X}-{port}{bit}")
+            else:
+                out.append(str(p))
+        
+        if len(out) == 1:
+            return out[0]
+        return str(tuple(out))
 
 
 # ---------------------------------------------------------------------------
