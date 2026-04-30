@@ -14,7 +14,6 @@
 /// core.reload(new_config_dict)  # called by SIGHUP handler
 /// core.stop()
 /// ```
-use std::collections::HashMap;
 use std::sync::Arc;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};

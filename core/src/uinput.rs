@@ -7,7 +7,7 @@
 use std::fs::OpenOptions;
 #[cfg(target_os = "linux")]
 use std::os::unix::io::{IntoRawFd, RawFd};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 #[cfg(target_os = "linux")]
@@ -105,7 +105,7 @@ pub fn open_all(config: &Arc<crate::bitmask::Config>) {
         if *fd != -1 {
             #[cfg(target_os = "linux")]
             unsafe {
-                libc::ioctl(*fd, UI_DEV_DESTROY as libc::c_int);
+                libc::ioctl(*fd, UI_DEV_DESTROY as _);
                 libc::close(*fd);
             }
             *fd = -1;
@@ -254,7 +254,7 @@ pub fn close_all() {
         if *fd != -1 {
             #[cfg(target_os = "linux")]
             unsafe {
-                libc::ioctl(*fd, UI_DEV_DESTROY as libc::c_int);
+                libc::ioctl(*fd, UI_DEV_DESTROY as _);
                 libc::close(*fd);
             }
             *fd = -1;
@@ -274,17 +274,17 @@ fn create_joypad(index: usize, peripherals: &[Arc<Peripheral>]) -> RawFd {
     };
 
     unsafe {
-        libc::ioctl(fd, UI_SET_EVBIT as libc::c_int, EV_KEY as libc::c_int);
-        libc::ioctl(fd, UI_SET_EVBIT as libc::c_int, EV_ABS as libc::c_int);
+        libc::ioctl(fd, UI_SET_EVBIT as _, EV_KEY as libc::c_int);
+        libc::ioctl(fd, UI_SET_EVBIT as _, EV_ABS as libc::c_int);
 
         for p in peripherals {
             match &p.event_type {
                 EventType::Button { evdev_code } => {
-                    libc::ioctl(fd, UI_SET_KEYBIT as libc::c_int, *evdev_code as libc::c_int);
+                    libc::ioctl(fd, UI_SET_KEYBIT as _, *evdev_code as libc::c_int);
                 }
                 EventType::Axis { evdev_type, evdev_code, .. } => {
                     if *evdev_type == EV_ABS as u32 {
-                        libc::ioctl(fd, UI_SET_ABSBIT as libc::c_int, *evdev_code as libc::c_int);
+                        libc::ioctl(fd, UI_SET_ABSBIT as _, *evdev_code as libc::c_int);
                         let abs_setup = uinput_abs_setup {
                             code: *evdev_code as u16,
                             absinfo: libc::input_absinfo {
@@ -296,9 +296,9 @@ fn create_joypad(index: usize, peripherals: &[Arc<Peripheral>]) -> RawFd {
                                 resolution: 0,
                             },
                         };
-                        libc::ioctl(fd, UI_ABS_SETUP as libc::c_int, &abs_setup);
+                        libc::ioctl(fd, UI_ABS_SETUP as _, &abs_setup);
                     } else if *evdev_type == EV_KEY as u32 {
-                        libc::ioctl(fd, UI_SET_KEYBIT as libc::c_int, *evdev_code as libc::c_int);
+                        libc::ioctl(fd, UI_SET_KEYBIT as _, *evdev_code as libc::c_int);
                     }
                 }
                 _ => {}
@@ -336,12 +336,12 @@ fn create_keyboard(peripherals: &[Arc<Peripheral>]) -> RawFd {
     };
 
     unsafe {
-        libc::ioctl(fd, UI_SET_EVBIT as libc::c_int, EV_KEY as libc::c_int);
-        libc::ioctl(fd, UI_SET_EVBIT as libc::c_int, EV_REP as libc::c_int);
+        libc::ioctl(fd, UI_SET_EVBIT as _, EV_KEY as libc::c_int);
+        libc::ioctl(fd, UI_SET_EVBIT as _, EV_REP as libc::c_int);
 
         for p in peripherals {
             if let EventType::Key { evdev_code } = &p.event_type {
-                libc::ioctl(fd, UI_SET_KEYBIT as libc::c_int, *evdev_code as libc::c_int);
+                libc::ioctl(fd, UI_SET_KEYBIT as _, *evdev_code as libc::c_int);
             }
         }
 
@@ -411,5 +411,8 @@ fn write_sync(fd: RawFd) {
 fn wait_for_release(peripheral: &Arc<Peripheral>) {
     while peripheral.is_pressed.load(Ordering::Relaxed) {
         std::thread::sleep(Duration::from_millis(10));
+    }
+}
+;
     }
 }
