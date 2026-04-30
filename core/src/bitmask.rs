@@ -66,9 +66,9 @@ pub struct Peripheral {
     pub name: String,
     /// Index into the devices array (0-3 joypads, 4 keyboard, 5 commands)
     pub device_index: usize,
-    /// Bitmask of BOARD pin numbers that must all be pressed to trigger this.
-    /// Bit N set means BOARD pin N must be held.
-    pub pin_mask: u64,
+    /// Bitmask of virtual BOARD pin numbers that must all be pressed to trigger this.
+    /// Bit N set means virtual BOARD pin N must be held.
+    pub pin_mask: [u64; 3],
     /// Number of set bits in `pin_mask`. Higher count wins combo conflicts.
     pub pin_count: u8,
     /// What to do when triggered
@@ -85,8 +85,10 @@ impl Peripheral {
     ///
     /// # Parameters
     /// - `gpio_bitmask`: current value of `GLOBAL_BITMASK`
-    pub fn bitmask_in(&self, gpio_bitmask: u64) -> bool {
-        gpio_bitmask & self.pin_mask == self.pin_mask
+    pub fn bitmask_in(&self, gpio_bitmask: [u64; 3]) -> bool {
+        (gpio_bitmask[0] & self.pin_mask[0] == self.pin_mask[0]) &&
+        (gpio_bitmask[1] & self.pin_mask[1] == self.pin_mask[1]) &&
+        (gpio_bitmask[2] & self.pin_mask[2] == self.pin_mask[2])
     }
 }
 
@@ -114,8 +116,10 @@ pub struct Config {
 // ---------------------------------------------------------------------------
 
 /// Bitmask of currently-pressed BOARD pins. Bit N set = pin N is held down.
-/// Updated atomically by GPIO callbacks from gpio.rs.
-static GLOBAL_BITMASK: AtomicU64 = AtomicU64::new(0);
+/// Updated atomically by GPIO callbacks from gpio.rs and i2c.rs.
+static GLOBAL_BITMASK: [AtomicU64; 3] = [
+    AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)
+];
 
 /// Per-device combo generation counter. Incremented each time a new press
 /// event starts a fresh combo window for that device. Rayon tasks capture
@@ -189,25 +193,35 @@ pub fn set_config(config: Config) {
 /// Exposed to Python via `lib.rs` for the live pin monitor UI.
 ///
 /// # Returns
-/// `u64` where bit N is set when BOARD pin N is currently held.
-pub fn current_bitmask() -> u64 {
-    GLOBAL_BITMASK.load(Ordering::Relaxed)
+/// `(u64, u64, u64)` where bit N in word i is set when BOARD pin (i*64 + N) is currently held.
+pub fn current_bitmask() -> (u64, u64, u64) {
+    (
+        GLOBAL_BITMASK[0].load(Ordering::Relaxed),
+        GLOBAL_BITMASK[1].load(Ordering::Relaxed),
+        GLOBAL_BITMASK[2].load(Ordering::Relaxed)
+    )
 }
 
 /// Mark a pin as pressed (rising edge). Updates `GLOBAL_BITMASK` atomically.
 ///
 /// # Parameters
-/// - `board_pin`: physical BOARD pin number (1-40)
+/// - `board_pin`: physical or virtual BOARD pin number (1-191)
 pub fn set_pin(board_pin: u8) {
-    GLOBAL_BITMASK.fetch_or(1u64 << board_pin, Ordering::SeqCst);
+    let idx = (board_pin / 64) as usize;
+    if idx < 3 {
+        GLOBAL_BITMASK[idx].fetch_or(1u64 << (board_pin % 64), Ordering::SeqCst);
+    }
 }
 
 /// Mark a pin as released (falling edge). Updates `GLOBAL_BITMASK` atomically.
 ///
 /// # Parameters
-/// - `board_pin`: physical BOARD pin number (1-40)
+/// - `board_pin`: physical or virtual BOARD pin number (1-191)
 pub fn clear_pin(board_pin: u8) {
-    GLOBAL_BITMASK.fetch_and(!(1u64 << board_pin), Ordering::SeqCst);
+    let idx = (board_pin / 64) as usize;
+    if idx < 3 {
+        GLOBAL_BITMASK[idx].fetch_and(!(1u64 << (board_pin % 64)), Ordering::SeqCst);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -267,7 +281,11 @@ pub fn on_pin_press(board_pin: u8) {
                 return;
             }
 
-            let bitmask = GLOBAL_BITMASK.load(Ordering::SeqCst);
+            let bitmask = [
+                GLOBAL_BITMASK[0].load(Ordering::SeqCst),
+                GLOBAL_BITMASK[1].load(Ordering::SeqCst),
+                GLOBAL_BITMASK[2].load(Ordering::SeqCst),
+            ];
             resolve_and_dispatch(&cfg, device_index, bitmask);
         });
     }
@@ -316,7 +334,7 @@ pub fn on_pin_release(board_pin: u8) {
 /// - `config`       : current configuration snapshot
 /// - `device_index` : which device's peripherals to scan (0-5)
 /// - `bitmask`      : current GLOBAL_BITMASK snapshot
-fn resolve_and_dispatch(config: &Arc<Config>, device_index: usize, bitmask: u64) {
+fn resolve_and_dispatch(config: &Arc<Config>, device_index: usize, bitmask: [u64; 3]) {
     for peripheral in &config.device_peripherals[device_index] {
         if peripheral.bitmask_in(bitmask) {
             crate::uinput::dispatch_press(peripheral, config.key_hold_delay_ms);
@@ -360,9 +378,12 @@ pub fn build_config(
     // Build pin → peripheral map for fast GPIO callback lookup
     let mut pin_map: HashMap<u8, Vec<Arc<Peripheral>>> = HashMap::new();
     for p in &arced {
-        for bit in 0u8..64 {
-            if p.pin_mask & (1u64 << bit) != 0 {
-                pin_map.entry(bit).or_default().push(p.clone());
+        for i in 0..3 {
+            if p.pin_mask[i] == 0 { continue; }
+            for bit in 0u8..64 {
+                if p.pin_mask[i] & (1u64 << bit) != 0 {
+                    pin_map.entry(i * 64 + bit).or_default().push(p.clone());
+                }
             }
         }
     }

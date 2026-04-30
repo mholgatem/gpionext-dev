@@ -102,7 +102,7 @@ const BOARD_TO_BCM: [Option<u32>; 41] = [
 ///
 /// # Returns
 /// `Some(bcm)` for a valid GPIO pin; `None` for power/ground/reserved pins.
-fn board_to_bcm(board_pin: u8) -> Option<u32> {
+pub(crate) fn board_to_bcm(board_pin: u8) -> Option<u32> {
     BOARD_TO_BCM.get(board_pin as usize).copied().flatten()
 }
 
@@ -257,7 +257,7 @@ impl GpioLoop {
 /// # Returns
 /// `Some(path)` if a suitable chip is found; `None` otherwise.
 #[cfg(feature = "gpio")]
-fn find_gpio_chip() -> Option<String> {
+pub(crate) fn find_gpio_chip() -> Option<String> {
     // Fast path: standard chip used on all Pi models with Pi OS
     let default = "/dev/gpiochip0".to_string();
     if std::path::Path::new(&default).exists() {

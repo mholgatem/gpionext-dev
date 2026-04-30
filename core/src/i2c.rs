@@ -2,65 +2,58 @@
 ///
 /// Both chips implement the `IoPin` trait so the rest of the system
 /// (bitmask engine, config UI) treats i2c pins identically to physical GPIO pins.
-///
-/// # Pin naming convention
-/// i2c pins are identified by string IDs that also appear in the config UI:
-/// - MCP23017 pin A0 at address 0x20: `"i2c-0x20-A0"`
-/// - MCP23017 pin B7 at address 0x27: `"i2c-0x27-B7"`
-/// - ADS1115 channel 2 at address 0x4A: `"i2c-0x4A-ch2"`
-///
-/// BOARD pins 3 (SDA) and 5 (SCL) are used by the i2c bus itself and are
-/// excluded from GPIO event detection in gpio.rs when the i2c feature is active.
-///
-/// # MCP23017 — GPIO expander
-/// - 16 bidirectional I/O pins: port A (A0-A7) and port B (B0-B7)
-/// - Up to 8 chips per bus (addresses 0x20-0x27) = 128 extra digital pins
-/// - Configured as all inputs with internal pullups (IOCON.MIRROR=1)
-/// - Interrupt-on-change: one GPIO INT pin wakes the Rust poll thread instead
-///   of constant polling. Automatically falls back to ~1ms polling if no INT pin.
-/// - Max i2c clock: 400 kHz (Fast Mode), set via `raspi-config` or /boot/config.txt
-///
-/// # ADS1115 — 4-channel 16-bit ADC
-/// - 4 single-ended input channels (AIN0-AIN3) per chip
-/// - Up to 4 chips per bus (addresses 0x48-0x4B) = 16 analog channels
-/// - Used for analog joystick axes; each channel maps to an EV_ABS axis in uinput
-/// - Continuous conversion mode at 250 SPS; polled at ~100 Hz in a Rayon task
-/// - Range: ±4.096 V (PGA=±4.096V), scaled to -255..+255 for the joystick axis
-///
-/// # i2c feature gate
-/// All hardware i2c access is gated behind the `i2c` Cargo feature (requires
-/// `i2cdev` crate). The trait and type stubs below compile without the feature.
+
+#[cfg(feature = "i2c")]
+use i2cdev::linux::LinuxI2CDevice;
+#[cfg(feature = "i2c")]
+use i2cdev::core::I2CDevice;
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+use crate::bitmask;
+use crate::gpio::{board_to_bcm, find_gpio_chip};
+
+// ---------------------------------------------------------------------------
+// Constants: MCP23017 (IOCON.BANK=0)
+// ---------------------------------------------------------------------------
+
+const MCP_IODIRA: u8 = 0x00;
+const MCP_IODIRB: u8 = 0x01;
+const MCP_GPINTENA: u8 = 0x04;
+const MCP_GPINTENB: u8 = 0x05;
+const MCP_DEFVALA: u8 = 0x06;
+const MCP_DEFVALB: u8 = 0x07;
+const MCP_INTCONA: u8 = 0x08;
+const MCP_INTCONB: u8 = 0x09;
+const MCP_IOCON: u8 = 0x0A;
+const MCP_GPPUA: u8 = 0x0C;
+const MCP_GPPUB: u8 = 0x0D;
+const MCP_GPIOA: u8 = 0x12;
+const MCP_GPIOB: u8 = 0x13;
+
+// ---------------------------------------------------------------------------
+// Constants: ADS1115
+// ---------------------------------------------------------------------------
+
+const ADS_REG_CONVERSION: u8 = 0x00;
+const ADS_REG_CONFIG: u8 = 0x01;
+
+// Config register bits
+const ADS_OS_SINGLE: u16 = 0x8000;
+const ADS_PGA_4_096V: u16 = 0x0200;
+const ADS_MODE_CONTINUOUS: u16 = 0x0000;
+const ADS_DR_250SPS: u16 = 0x00A0;
+const ADS_COMP_QUE_DISABLE: u16 = 0x0003;
 
 // ---------------------------------------------------------------------------
 // IoPin trait — common interface for GPIO and i2c pins
 // ---------------------------------------------------------------------------
 
-/// Common interface implemented by all pin types:
-/// - Physical GPIO pins (gpio.rs, via libgpiod)
-/// - MCP23017 digital input pins (`Mcp23017Pin`)
-/// - ADS1115 analog channels (`Ads1115Channel`, digital via threshold)
-///
-/// The bitmask engine (bitmask.rs) and config UI work exclusively with `IoPin`
-/// references, making the underlying hardware transparent.
 pub trait IoPin: Send + Sync {
-    /// Canonical string identifier as shown in the config UI and stored in the DB.
-    ///
-    /// # Returns
-    /// e.g. `"11"` for BOARD pin 11, `"i2c-0x20-A0"` for MCP23017.
     fn pin_id(&self) -> String;
-
-    /// True when the pin is in the active (pressed / triggered) state.
-    /// For digital pins: low when pulled up, high when pulled down.
-    /// For ADS1115: true when `|read_analog()| > threshold`.
     fn is_pressed(&self) -> bool;
-
-    /// Raw analog reading in the range -32768..32767.
-    /// Returns 0 for digital-only pins (physical GPIO and MCP23017).
     fn read_analog(&self) -> i16;
-
-    /// BOARD pin number equivalent for this i2c pin, used to index bitmask.
-    /// For i2c pins this is a virtual pin number > 40 to avoid collision with
-    /// physical pins (MCP23017: 64+, ADS1115: 128+).
     fn virtual_pin(&self) -> u8;
 }
 
@@ -68,38 +61,15 @@ pub trait IoPin: Send + Sync {
 // MCP23017 GPIO expander
 // ---------------------------------------------------------------------------
 
-/// A single digital input pin on an MCP23017 GPIO expander.
-///
-/// MCP23017 pins are assigned virtual BOARD numbers starting at 64:
-///   - Chip 0x20 port A: virtual pins 64-71 (A0-A7)
-///   - Chip 0x20 port B: virtual pins 72-79 (B0-B7)
-///   - Chip 0x21 port A: virtual pins 80-87, etc.
-///
-/// This mapping ensures MCP23017 bitmask bits never collide with physical GPIO bits.
 pub struct Mcp23017Pin {
-    /// i2c bus number (usually 1 for Pi; /dev/i2c-1)
     pub bus: u8,
-    /// i2c address of the chip (0x20-0x27)
     pub address: u8,
-    /// Port character: 'A' or 'B'
     pub port: char,
-    /// Bit index within the port (0-7)
     pub bit: u8,
-    /// Virtual BOARD pin number (64+) assigned at config time
     pub vpin: u8,
 }
 
 impl Mcp23017Pin {
-    /// Construct from address + port + bit, assigning a virtual pin number.
-    ///
-    /// # Parameters
-    /// - `bus`    : i2c bus number (usually 1)
-    /// - `address`: chip i2c address (0x20-0x27)
-    /// - `port`   : 'A' or 'B'
-    /// - `bit`    : 0-7
-    ///
-    /// # Returns
-    /// A new pin with `vpin` computed as `64 + (address-0x20)*16 + port_offset + bit`.
     pub fn new(bus: u8, address: u8, port: char, bit: u8) -> Self {
         let chip_offset = (address.saturating_sub(0x20)) as u8 * 16;
         let port_offset: u8 = if port == 'A' { 0 } else { 8 };
@@ -116,61 +86,50 @@ impl IoPin for Mcp23017Pin {
     fn is_pressed(&self) -> bool {
         #[cfg(feature = "i2c")]
         {
-            // Phase 3: read GPIO register from MCP23017
-            // let reg = if self.port == 'A' { REG_GPIOA } else { REG_GPIOB };
-            // let byte = i2c_read_byte(self.bus, self.address, reg).unwrap_or(0xFF);
-            // (byte >> self.bit) & 1 == 0  // active-low with pullups
+            if let Ok(mut dev) = LinuxI2CDevice::new(format!("/dev/i2c-{}", self.bus), self.address as u16) {
+                let reg = if self.port == 'A' { MCP_GPIOA } else { MCP_GPIOB };
+                if let Ok(byte) = dev.smbus_read_byte_data(reg) {
+                    return (byte >> self.bit) & 1 == 0; // active-low with pullups
+                }
+            }
         }
-        false // stub
+        false
     }
 
     fn read_analog(&self) -> i16 { 0 }
-
     fn virtual_pin(&self) -> u8 { self.vpin }
 }
 
-/// Manages a complete MCP23017 chip: discovers all 16 pins, configures
-/// registers, and optionally sets up interrupt-driven reads.
 pub struct Mcp23017 {
-    /// i2c bus number
     pub bus: u8,
-    /// Chip i2c address (0x20-0x27)
     pub address: u8,
-    /// Optional GPIO interrupt pin (BOARD number) for INT-driven reads.
-    /// `None` → polling mode (~1ms interval in a Rayon task).
     pub int_pin: Option<u8>,
-    /// All 16 pins (A0-A7, B0-B7) as `IoPin` instances
     pub pins: Vec<Mcp23017Pin>,
 }
 
 impl Mcp23017 {
-    /// Construct and initialise an MCP23017 chip.
-    ///
-    /// Configures:
-    /// - IODIR A+B = 0xFF (all inputs)
-    /// - GPPU  A+B = 0xFF (all pullups enabled)
-    /// - IOCON.MIRROR = 1 (INT pins mirrored so either INT pin signals any change)
-    /// - INTCON A+B = 0x00 (interrupt on change from previous state)
-    /// - DEFVAL A+B = 0x00 (compare to previous state)
-    ///
-    /// # Parameters
-    /// - `bus`    : i2c bus number (usually 1)
-    /// - `address`: chip i2c address (0x20-0x27)
-    /// - `int_pin`: optional BOARD GPIO pin connected to chip's INTA/INTB
-    ///
-    /// # Returns
-    /// `Ok(Mcp23017)` on success; `Err` if the chip is not found on the bus.
     pub fn new(bus: u8, address: u8, int_pin: Option<u8>) -> Result<Self, I2cError> {
         #[cfg(feature = "i2c")]
         {
-            // Phase 3: open /dev/i2c-{bus} and configure registers
-            // use i2cdev::linux::LinuxI2CDevice;
-            // let mut dev = LinuxI2CDevice::new(format!("/dev/i2c-{bus}"), address as u16)?;
-            // dev.smbus_write_byte_data(REG_IOCON, 0x40)?;  // MIRROR=1
-            // dev.smbus_write_byte_data(REG_IODIRA, 0xFF)?; // all inputs
-            // dev.smbus_write_byte_data(REG_IODIRB, 0xFF)?;
-            // dev.smbus_write_byte_data(REG_GPPUA,  0xFF)?; // all pullups
-            // dev.smbus_write_byte_data(REG_GPPUB,  0xFF)?;
+            let mut dev = LinuxI2CDevice::new(format!("/dev/i2c-{bus}"), address as u16)
+                .map_err(|e| I2cError::BusOpenFailed { bus, reason: e.to_string() })?;
+
+            // Initialize MCP23017
+            // 1. Configure IOCON: MIRROR=1 (bit 6), ODR=0 (bit 2), INTPOL=0 (bit 1, active-low)
+            dev.smbus_write_byte_data(MCP_IOCON, 0x40)
+                .map_err(|e| I2cError::IoError { address, reason: e.to_string() })?;
+
+            // 2. All pins as inputs
+            dev.smbus_write_byte_data(MCP_IODIRA, 0xFF).map_err(|_| I2cError::IoError { address, reason: "IODIRA".into() })?;
+            dev.smbus_write_byte_data(MCP_IODIRB, 0xFF).map_err(|_| I2cError::IoError { address, reason: "IODIRB".into() })?;
+
+            // 3. Enable all pullups
+            dev.smbus_write_byte_data(MCP_GPPUA, 0xFF).map_err(|_| I2cError::IoError { address, reason: "GPPUA".into() })?;
+            dev.smbus_write_byte_data(MCP_GPPUB, 0xFF).map_err(|_| I2cError::IoError { address, reason: "GPPUB".into() })?;
+
+            // 4. Enable interrupt-on-change for all pins
+            dev.smbus_write_byte_data(MCP_GPINTENA, 0xFF).map_err(|_| I2cError::IoError { address, reason: "GPINTENA".into() })?;
+            dev.smbus_write_byte_data(MCP_GPINTENB, 0xFF).map_err(|_| I2cError::IoError { address, reason: "GPINTENB".into() })?;
         }
 
         let pins: Vec<Mcp23017Pin> = (0u8..8).map(|b| Mcp23017Pin::new(bus, address, 'A', b))
@@ -180,21 +139,79 @@ impl Mcp23017 {
         Ok(Mcp23017 { bus, address, int_pin, pins })
     }
 
-    /// Scan the i2c bus for MCP23017 chips at addresses 0x20-0x27.
-    ///
-    /// # Parameters
-    /// - `bus`: i2c bus number (usually 1)
-    ///
-    /// # Returns
-    /// List of found i2c addresses.
     pub fn scan(bus: u8) -> Vec<u8> {
-        let _ = bus;
+        let mut found = Vec::new();
         #[cfg(feature = "i2c")]
         {
-            // Phase 3: probe each address with a zero-byte write
-            // (0x20u8..=0x27).filter(|&addr| probe_i2c(bus, addr).is_ok()).collect()
+            for addr in 0x20u8..=0x27 {
+                if let Ok(mut dev) = LinuxI2CDevice::new(format!("/dev/i2c-{bus}"), addr as u16) {
+                    if dev.smbus_read_byte_data(MCP_IODIRA).is_ok() {
+                        found.push(addr);
+                    }
+                }
+            }
         }
-        vec![] // stub
+        found
+    }
+
+    #[cfg(feature = "i2c")]
+    pub fn poll(&self, running: Arc<AtomicBool>) {
+        let mut dev = match LinuxI2CDevice::new(format!("/dev/i2c-{}", self.bus), self.address as u16) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+
+        // Initialize interrupt line if requested
+        let mut int_request = if let Some(board_pin) = self.int_pin {
+            if let Some(bcm) = board_to_bcm(board_pin) {
+                if let Some(chip_path) = find_gpio_chip() {
+                    gpiocdev::Request::builder()
+                        .on_chip(&chip_path)
+                        .with_consumer("gpionext-i2c-int")
+                        .with_line(bcm)
+                        .as_input()
+                        .with_bias(gpiocdev::line::Bias::PullUp)
+                        .with_edge_detection(gpiocdev::line::EdgeDetection::BothEdges)
+                        .request()
+                        .ok()
+                } else { None }
+            } else { None }
+        } else { None };
+
+        let mut last_state: u16 = 0xFFFF;
+
+        loop {
+            if !running.load(Ordering::Relaxed) {
+                break;
+            }
+
+            // Wait for interrupt or sleep
+            if let Some(req) = &mut int_request {
+                let _ = req.wait_edge_event(Duration::from_millis(100));
+            } else {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+
+            // Batched read: read both GPIOA and GPIOB in one 16-bit transaction
+            if let Ok(state) = dev.smbus_read_word_data(MCP_GPIOA) {
+                if state != last_state {
+                    for bit in 0..16 {
+                        let pressed = (state >> bit) & 1 == 0;
+                        let last_pressed = (last_state >> bit) & 1 == 0;
+                        if pressed != last_pressed {
+                            let vpin = 64 + (self.address.saturating_sub(0x20)) * 16 + bit as u8;
+                            if pressed {
+                                bitmask::set_pin(vpin);
+                                bitmask::on_pin_press(vpin);
+                            } else {
+                                bitmask::on_pin_release(vpin);
+                            }
+                        }
+                    }
+                    last_state = state;
+                }
+            }
+        }
     }
 }
 
@@ -202,48 +219,22 @@ impl Mcp23017 {
 // ADS1115 ADC
 // ---------------------------------------------------------------------------
 
-/// A single analog input channel on an ADS1115 ADC.
-///
-/// ADS1115 channels are assigned virtual BOARD numbers starting at 128:
-///   - Chip 0x48 ch0-ch3: virtual pins 128-131
-///   - Chip 0x49 ch0-ch3: virtual pins 132-135, etc.
 pub struct Ads1115Channel {
-    /// i2c bus number
     pub bus: u8,
-    /// Chip i2c address (0x48-0x4B)
     pub address: u8,
-    /// Channel index (0-3 = AIN0-AIN3)
     pub channel: u8,
-    /// Virtual BOARD pin number (128+)
     pub vpin: u8,
-    /// Raw ADC value below this magnitude is treated as "centre" (not pressed).
-    /// Expressed in ADC counts; default ≈ 2048 (half of 32767 for ±4.096V).
     pub dead_zone: i16,
 }
 
 impl Ads1115Channel {
-    /// Construct a channel reference.
-    ///
-    /// # Parameters
-    /// - `bus`      : i2c bus number
-    /// - `address`  : chip address (0x48-0x4B)
-    /// - `channel`  : 0-3 (maps to AIN0-AIN3 in single-ended mode)
-    /// - `dead_zone`: raw ADC units to treat as centre; default 2048
     pub fn new(bus: u8, address: u8, channel: u8, dead_zone: i16) -> Self {
         let chip_offset = (address.saturating_sub(0x48)) * 4;
         let vpin = 128 + chip_offset + channel;
         Ads1115Channel { bus, address, channel, vpin, dead_zone }
     }
 
-    /// Scale a raw ADS1115 reading (-32768..32767) to joystick axis range (-255..255).
-    ///
-    /// # Parameters
-    /// - `raw`: raw 16-bit signed ADC value
-    ///
-    /// # Returns
-    /// Scaled value clamped to -255..255.
     pub fn scale_to_axis(raw: i16) -> i32 {
-        // Linear scale: 32767 → 255, -32768 → -255
         ((raw as i32) * 255) / 32767
     }
 }
@@ -260,30 +251,83 @@ impl IoPin for Ads1115Channel {
     fn read_analog(&self) -> i16 {
         #[cfg(feature = "i2c")]
         {
-            // Phase 3: read conversion register from ADS1115
-            // let config = ads1115_config(self.channel, PGA_4_096V, DR_250SPS, OS_SINGLE);
-            // i2c_write_word(self.bus, self.address, REG_CONFIG, config)?;
-            // std::thread::sleep(Duration::from_millis(5)); // wait for conversion
-            // i2c_read_word(self.bus, self.address, REG_CONVERSION).unwrap_or(0)
+            if let Ok(mut dev) = LinuxI2CDevice::new(format!("/dev/i2c-{}", self.bus), self.address as u16) {
+                let mux = (0x04 + self.channel as u16) << 12;
+                let config = ADS_OS_SINGLE | mux | ADS_PGA_4_096V | ADS_MODE_CONTINUOUS | ADS_DR_250SPS | ADS_COMP_QUE_DISABLE;
+                let config_swapped = config.swap_bytes();
+                if dev.smbus_write_word_data(ADS_REG_CONFIG, config_swapped).is_ok() {
+                    std::thread::sleep(Duration::from_millis(5));
+                    if let Ok(val) = dev.smbus_read_word_data(ADS_REG_CONVERSION) {
+                        return i16::from_be(val as i16);
+                    }
+                }
+            }
         }
-        0 // stub
+        0
     }
 
     fn virtual_pin(&self) -> u8 { self.vpin }
+}
+
+pub struct Ads1115 {
+    pub bus: u8,
+    pub address: u8,
+    pub channels: Vec<Ads1115Channel>,
+}
+
+impl Ads1115 {
+    pub fn new(bus: u8, address: u8) -> Result<Self, I2cError> {
+        let channels = (0..4).map(|ch| Ads1115Channel::new(bus, address, ch, 2048)).collect();
+        Ok(Ads1115 { bus, address, channels })
+    }
+
+    pub fn scan(bus: u8) -> Vec<u8> {
+        let mut found = Vec::new();
+        #[cfg(feature = "i2c")]
+        {
+            for addr in 0x48u8..=0x4B {
+                if let Ok(mut dev) = LinuxI2CDevice::new(format!("/dev/i2c-{bus}"), addr as u16) {
+                    if dev.smbus_read_word_data(ADS_REG_CONFIG).is_ok() {
+                        found.push(addr);
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    #[cfg(feature = "i2c")]
+    pub fn poll(&self, running: Arc<AtomicBool>) {
+        loop {
+            if !running.load(Ordering::Relaxed) {
+                break;
+            }
+            for ch in &self.channels {
+                let val = ch.read_analog();
+                let pressed = val.abs() > ch.dead_zone;
+                let vpin = ch.vpin;
+                
+                // For analog axes, we'll update the bitmask so live view works,
+                // but real axis movement is handled elsewhere or via combos.
+                if pressed {
+                    bitmask::set_pin(vpin);
+                } else {
+                    bitmask::clear_pin(vpin);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------
 
-/// Errors that can occur during i2c device setup or reads.
 #[derive(Debug)]
 pub enum I2cError {
-    /// /dev/i2c-N could not be opened (kernel module not loaded, wrong bus)
     BusOpenFailed { bus: u8, reason: String },
-    /// No device responded at the given address (not connected or wrong address)
     DeviceNotFound { bus: u8, address: u8 },
-    /// Register read/write failed (bus error, device reset)
     IoError { address: u8, reason: String },
 }
 
@@ -299,36 +343,3 @@ impl std::fmt::Display for I2cError {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// MCP23017 register map (for reference / Phase 3 implementation)
-// ---------------------------------------------------------------------------
-//
-// IOCON.BANK=0 (default after power-on):
-//   0x00 IODIRA   — I/O direction port A (1=input, 0=output)
-//   0x01 IODIRB   — I/O direction port B
-//   0x02 IPOLA    — Input polarity port A
-//   0x03 IPOLB
-//   0x04 GPINTENA — Interrupt-on-change enable port A
-//   0x05 GPINTENB
-//   0x06 DEFVALA  — Default compare value port A
-//   0x07 DEFVALB
-//   0x08 INTCONA  — Interrupt control port A (0=change, 1=compare DEFVAL)
-//   0x09 INTCONB
-//   0x0A IOCON    — Configuration register
-//   0x0B IOCON    — (mirror)
-//   0x0C GPPUA    — Pull-up resistors port A
-//   0x0D GPPUB
-//   0x0E INTFA    — Interrupt flag port A (read-only)
-//   0x0F INTFB
-//   0x10 INTCAPA  — Interrupt capture port A (latched at interrupt time)
-//   0x11 INTCAPB
-//   0x12 GPIOA    — Port A GPIO state (read)
-//   0x13 GPIOB
-//   0x14 OLATA    — Output latch port A (write)
-//   0x15 OLATB
-//
-// IOCON bits:
-//   bit 6 MIRROR — 1: INTA/INTB are mirrored (either signals)
-//   bit 2 ODR    — 1: INT pin is open-drain
-//   bit 1 INTPOL — 1: INT active-high, 0: active-low
