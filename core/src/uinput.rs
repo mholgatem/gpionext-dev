@@ -197,7 +197,8 @@ pub fn dispatch_press(peripheral: &Arc<Peripheral>, key_hold_delay_ms: u64) {
                 write_event(fd, *evdev_type as u16, *evdev_code as u16, *press_value);
                 write_sync(fd);
                 wait_for_release(peripheral);
-            }            EventType::Command { bash } => {
+            }
+            EventType::Command { bash } => {
                 let cmd = bash.clone();
                 if let Some(pool) = crate::bitmask::get_pool() {
                     pool.spawn(move || {
@@ -321,8 +322,8 @@ fn create_joypad(index: usize, peripherals: &[Arc<Peripheral>]) -> RawFd {
             setup.name[i] = b as libc::c_char;
         }
 
-        libc::ioctl(fd, UI_DEV_SETUP as libc::c_int, &setup);
-        libc::ioctl(fd, UI_DEV_CREATE as libc::c_int);
+        libc::ioctl(fd, UI_DEV_SETUP as _, &setup);
+        libc::ioctl(fd, UI_DEV_CREATE as _);
     }
 
     fd
@@ -361,8 +362,8 @@ fn create_keyboard(peripherals: &[Arc<Peripheral>]) -> RawFd {
             setup.name[i] = b as libc::c_char;
         }
 
-        libc::ioctl(fd, UI_DEV_SETUP as libc::c_int, &setup);
-        libc::ioctl(fd, UI_DEV_CREATE as libc::c_int);
+        libc::ioctl(fd, UI_DEV_SETUP as _, &setup);
+        libc::ioctl(fd, UI_DEV_CREATE as _);
     }
 
     fd
@@ -411,8 +412,5 @@ fn write_sync(fd: RawFd) {
 fn wait_for_release(peripheral: &Arc<Peripheral>) {
     while peripheral.is_pressed.load(Ordering::Relaxed) {
         std::thread::sleep(Duration::from_millis(10));
-    }
-}
-;
     }
 }
