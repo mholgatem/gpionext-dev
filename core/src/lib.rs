@@ -39,14 +39,14 @@ fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-/// Returns the current pressed-pin bitmask as an integer.
-/// Bit N is set when BOARD pin N is currently held down.
+/// Returns the current pressed-pin bitmask as a 3-word tuple.
+/// Bit N in word i is set when BOARD pin (i*64 + N) is currently held down.
 /// Called by `live_pin_view.py` every ~50ms to update the UI.
 ///
 /// # Returns
-/// `int` (u64) — bitmask of active pins
+/// `(int, int, int)` — 192-bit bitmask of active pins
 #[pyfunction]
-fn get_pin_states() -> u64 {
+fn get_pin_states() -> (u64, u64, u64) {
     bitmask::current_bitmask()
 }
 
@@ -62,13 +62,19 @@ fn get_pin_states() -> u64 {
 #[pyclass]
 struct GpioCore {
     gpio_loop: Option<gpio::GpioLoop>,
+    i2c_threads: Vec<std::thread::JoinHandle<()>>,
+    running: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[pymethods]
 impl GpioCore {
     #[new]
     fn new() -> Self {
-        GpioCore { gpio_loop: None }
+        GpioCore {
+            gpio_loop: None,
+            i2c_threads: Vec::new(),
+            running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
     }
 
     /// Start the GPIO event loop and initialise the Rayon thread pool.
@@ -91,6 +97,7 @@ impl GpioCore {
     /// # Errors
     /// Raises `RuntimeError` if GPIO setup fails (missing module, bad pin, etc.)
     fn start(&mut self, config: &Bound<'_, PyDict>) -> PyResult<()> {
+        self.running.store(true, std::sync::atomic::Ordering::SeqCst);
         let combo_delay: u64 = config
             .get_item("combo_delay")?
             .map(|v| v.extract())
@@ -144,13 +151,49 @@ impl GpioCore {
             Err(e) => return Err(pyo3::exceptions::PyRuntimeError::new_err(e.to_string())),
         }
 
+        // Start I2C drivers if enabled
+        #[cfg(feature = "i2c")]
+        {
+            if let Some(mcp_list) = config.get_item("i2c_mcp23017")? {
+                let list = mcp_list.downcast::<PyList>()?;
+                for item in list.iter() {
+                    let d = item.downcast::<PyDict>()?;
+                    let bus: u8 = d.get_item("bus")?.map(|v| v.extract()).transpose()?.unwrap_or(1);
+                    let addr: u8 = d.get_item("address")?.map(|v| v.extract()).transpose()?.unwrap_or(0x20);
+                    let int_pin: Option<u8> = d.get_item("int_pin")?.map(|v| v.extract()).transpose()?;
+                    
+                    if let Ok(mcp) = i2c::Mcp23017::new(bus, addr, int_pin) {
+                        let r = self.running.clone();
+                        self.i2c_threads.push(std::thread::spawn(move || mcp.poll(r)));
+                    }
+                }
+            }
+            if let Some(ads_list) = config.get_item("i2c_ads1115")? {
+                let list = ads_list.downcast::<PyList>()?;
+                for item in list.iter() {
+                    let d = item.downcast::<PyDict>()?;
+                    let bus: u8 = d.get_item("bus")?.map(|v| v.extract()).transpose()?.unwrap_or(1);
+                    let addr: u8 = d.get_item("address")?.map(|v| v.extract()).transpose()?.unwrap_or(0x48);
+                    
+                    if let Ok(ads) = i2c::Ads1115::new(bus, addr) {
+                        let r = self.running.clone();
+                        self.i2c_threads.push(std::thread::spawn(move || ads.poll(r)));
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
     /// Stop the GPIO event loop and flush all active uinput devices.
     fn stop(&mut self) -> PyResult<()> {
+        self.running.store(false, std::sync::atomic::Ordering::SeqCst);
         if let Some(lp) = self.gpio_loop.take() {
             lp.stop();
+        }
+        for thread in self.i2c_threads.drain(..) {
+            let _ = thread.join();
         }
         uinput::close_all();
         Ok(())
@@ -246,12 +289,15 @@ fn parse_peripherals(config: &Bound<'_, PyDict>) -> PyResult<Vec<Peripheral>> {
             .transpose()?
             .unwrap_or_default();
 
-        // Build pin bitmask from pin list
-        let mut pin_mask: u64 = 0;
+        // Build 192-bit pin bitmask from pin list
+        let mut pin_mask: [u64; 3] = [0, 0, 0];
         for &pin in &pins {
-            pin_mask |= 1u64 << pin;
+            let idx = (pin / 64) as usize;
+            if idx < 3 {
+                pin_mask[idx] |= 1u64 << (pin % 64);
+            }
         }
-        let pin_count = pin_mask.count_ones() as u8;
+        let pin_count = (pin_mask[0].count_ones() + pin_mask[1].count_ones() + pin_mask[2].count_ones()) as u8;
 
         // Parse event type
         let event_type = match type_str.as_str() {

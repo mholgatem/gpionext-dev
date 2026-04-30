@@ -139,7 +139,11 @@ class LivePinView:
             if key in (ord('q'), ord('Q'), 27):  # q, Q, ESC
                 break
 
-            bitmask = gpionext_core.get_pin_states() if _HAS_CORE else 0
+            if _HAS_CORE:
+                res = gpionext_core.get_pin_states()
+                bitmask = res[0] | (res[1] << 64) | (res[2] << 128)
+            else:
+                bitmask = 0
             self._draw(stdscr, bitmask, dim_attr)
             time.sleep(self.REFRESH_INTERVAL)
 

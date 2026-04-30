@@ -29,7 +29,7 @@ gpiocdev = { version = "0.8", optional = true }
 
 # i2cdev: Linux i2c-dev ioctl wrapper for MCP23017 and ADS1115.
 # Feature-gated: enable with --features i2c
-# i2cdev = { version = "0.6", optional = true }
+i2cdev = { version = "0.6", optional = true }
 libc = "0.2"
 
 [features]
@@ -37,7 +37,7 @@ default = []
 # gpio: enables the gpiocdev event loop (Phase 2)
 gpio = ["dep:gpiocdev"]
 # i2c: enables MCP23017 + ADS1115 drivers (Phase 3)
-i2c = []
+i2c = ["dep:i2cdev", "dep:gpiocdev"]
 
 [profile.release]
 # Strip debug symbols for smaller .so shipped in GitHub Releases
