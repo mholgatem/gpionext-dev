@@ -78,6 +78,8 @@ parser.add_argument('--debounce', metavar='1', default=1, type=int,
                     help='Debounce time in milliseconds')
 parser.add_argument('--pulldown', dest='pulldown', default=False, action='store_true',
                     help='Use pulldown resistors instead of pullup')
+parser.add_argument('--use_i2c', dest='use_i2c', default=False, action='store_true',
+                    help='Enable I2C hardware (MCP23017/ADS1115). Disables GPIO on pins 3 and 5.')
 parser.add_argument('--dev', dest='dev', default=False, action='store_true')
 parser.add_argument('--debug', dest='debug', default=False, action='store_true')
 
@@ -134,7 +136,8 @@ class ConfigurationManager:
             return
         self._core = gpionext_core.GpioCore()
         try:
-            self._core.start_monitor(self.args.pins, self.args.pulldown, self.args.debounce)
+            config_dict = SQL.buildConfigDict(self.args)
+            self._core.start_monitor(config_dict)
         except RuntimeError as exc:
             print(pcolor('yellow', f'WARNING: GPIO monitor failed to start: {exc}'))
             print(pcolor('yellow', 'Pin detection will be disabled.'))
@@ -521,6 +524,13 @@ class ConfigurationManager:
         import config.baudrate as baudrate
         while True:
             print(f'\n{pcolor("bold", "Hardware Settings")}')
+            
+            use_i2c = getattr(self.args, 'use_i2c', False)
+            if not use_i2c:
+                print(pcolor('yellow', '  [!] I2C is currently DISABLED.'))
+                print(pcolor('yellow', '      Run "gpionext set use_i2c true" to enable.'))
+                print()
+
             print(f'  {pcolor("cyan", "1")}. I2C Baudrate (Current: {baudrate.get_current_baudrate()} Hz)')
             print(f'  {pcolor("cyan", "2")}. Manage MCP23017 chips')
             print(f'  {pcolor("cyan", "3")}. Manage ADS1115 chips')
@@ -637,18 +647,19 @@ class ConfigurationManager:
         # Start with physical BOARD pins
         pins_to_show = list(self.args.pins)
         
-        # Add configured I2C pins
-        mcp_chips = SQL._cursor.execute('SELECT address FROM I2C_MCP23017').fetchall()
-        for mcp in mcp_chips:
-            addr = mcp['address']
-            base_vpin = 64 + (addr - 0x20) * 16
-            pins_to_show.extend(range(base_vpin, base_vpin + 16))
-            
-        ads_chips = SQL._cursor.execute('SELECT address FROM I2C_ADS1115').fetchall()
-        for ads in ads_chips:
-            addr = ads['address']
-            base_vpin = 128 + (addr - 0x48) * 4
-            pins_to_show.extend(range(base_vpin, base_vpin + 4))
+        # Add configured I2C pins only if enabled
+        if getattr(self.args, 'use_i2c', False):
+            mcp_chips = SQL._cursor.execute('SELECT address FROM I2C_MCP23017').fetchall()
+            for mcp in mcp_chips:
+                addr = mcp['address']
+                base_vpin = 64 + (addr - 0x20) * 16
+                pins_to_show.extend(range(base_vpin, base_vpin + 16))
+                
+            ads_chips = SQL._cursor.execute('SELECT address FROM I2C_ADS1115').fetchall()
+            for ads in ads_chips:
+                addr = ads['address']
+                base_vpin = 128 + (addr - 0x48) * 4
+                pins_to_show.extend(range(base_vpin, base_vpin + 4))
 
         with LivePinView(pins_to_show, db_rows) as view:
             view.run()

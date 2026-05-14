@@ -330,9 +330,21 @@ def buildConfigDict(args) -> dict:
     except ImportError:
         pass
 
-    # Load I2C configurations
-    mcp_list = _cursor.execute('SELECT bus, address, int_pin FROM I2C_MCP23017').fetchall()
-    ads_list = _cursor.execute('SELECT bus, address FROM I2C_ADS1115').fetchall()
+    use_i2c = getattr(args, 'use_i2c', False)
+    if use_i2c:
+        # BOARD 3 & 5 are I2C pins. We must skip them in gpiocdev if using I2C
+        if 3 not in skip_pins:
+            skip_pins.append(3)
+        if 5 not in skip_pins:
+            skip_pins.append(5)
+
+    # Load I2C configurations only if use_i2c flag is set
+    if use_i2c:
+        mcp_list = _cursor.execute('SELECT bus, address, int_pin FROM I2C_MCP23017').fetchall()
+        ads_list = _cursor.execute('SELECT bus, address FROM I2C_ADS1115').fetchall()
+    else:
+        mcp_list = []
+        ads_list = []
 
     return {
         'peripherals':     peripherals,
@@ -344,6 +356,7 @@ def buildConfigDict(args) -> dict:
         'pulldown':        bool(args.pulldown),
         'pins':            list(args.pins),
         'skip_pins':       skip_pins,
+        'use_i2c':         use_i2c,
     }
 
 def _map_i2c_pin_string_to_vpin(s: str) -> int:
