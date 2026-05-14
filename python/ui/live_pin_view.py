@@ -140,8 +140,7 @@ class LivePinView:
                 break
 
             if _HAS_CORE:
-                res = gpionext_core.get_pin_states()
-                bitmask = res[0] | (res[1] << 64) | (res[2] << 128)
+                bitmask = gpionext_core.get_pin_states()
             else:
                 bitmask = 0
             self._draw(stdscr, bitmask, dim_attr)

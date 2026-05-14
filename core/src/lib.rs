@@ -38,15 +38,26 @@ fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-/// Returns the current pressed-pin bitmask as a 3-word tuple.
-/// Bit N in word i is set when BOARD pin (i*64 + N) is currently held down.
-/// Called by `live_pin_view.py` every ~50ms to update the UI.
+/// Returns the current pressed-pin bitmask as a single arbitrary-precision integer.
+/// This allows Python code to perform bitwise operations directly (e.g. `bitmask & (1 << pin)`).
+/// Now supports up to 192 bits (64 physical GPIO + 128 virtual I2C).
 ///
 /// # Returns
-/// `(int, int, int)` — 192-bit bitmask of active pins
+/// `int` — current bitmask of all 192 potential pins
 #[pyfunction]
-fn get_pin_states() -> (u64, u64, u64) {
-    bitmask::current_bitmask()
+fn get_pin_states(py: Python<'_>) -> PyResult<PyObject> {
+    let (w0, w1, w2) = bitmask::current_bitmask();
+    let mut bytes = [0u8; 24];
+    bytes[0..8].copy_from_slice(&w0.to_le_bytes());
+    bytes[8..16].copy_from_slice(&w1.to_le_bytes());
+    bytes[16..24].copy_from_slice(&w2.to_le_bytes());
+
+    // Construct a Python 'int' from these 24 bytes (little-endian, unsigned)
+    let int_obj = py
+        .get_type::<pyo3::types::PyLong>()
+        .call_method1("from_bytes", (bytes.as_slice(), "little"))?;
+    
+    Ok(int_obj.unbind())
 }
 
 // ---------------------------------------------------------------------------
