@@ -184,8 +184,14 @@ fi
 echo -e "${CYAN}${UNDERLINE}Installing to ${INSTALL_PATH}...${NONE}"
 mkdir -p "${INSTALL_PATH}/config"
 
-# Copy refactor/ contents to install path
-cp -r "${SCRIPTPATH}/." "${INSTALL_PATH}/"
+# Copy source to install path, excluding .git
+# We use rsync if available for cleaner exclusion, otherwise cp
+if hash rsync 2>/dev/null; then
+    rsync -a --exclude=".git" "${SCRIPTPATH}/" "${INSTALL_PATH}/"
+else
+    cp -r "${SCRIPTPATH}/." "${INSTALL_PATH}/"
+    rm -rf "${INSTALL_PATH}/.git"
+fi
 
 # ---------------------------------------------------------------------------
 # Python virtualenv

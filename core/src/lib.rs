@@ -227,24 +227,77 @@ impl GpioCore {
     /// without needing a full daemon running.
     ///
     /// # Parameters
-    /// - `pins`     : list[int] — BOARD pin numbers to monitor
-    /// - `pulldown` : bool — use pulldown instead of pullup resistors
-    /// - `debounce` : int — debounce time in milliseconds
+    /// - `config`: same schema as `start()`
     ///
     /// # Errors
     /// Raises `RuntimeError` if GPIO setup fails.
-    fn start_monitor(&mut self, pins: Vec<u8>, pulldown: bool, debounce: u32) -> PyResult<()> {
+    fn start_monitor(&mut self, config: &Bound<'_, PyDict>) -> PyResult<()> {
+        self.running.store(true, std::sync::atomic::Ordering::SeqCst);
         init_pool(4); // smaller pool — config tool doesn't need combo resolution
+
+        let pins: Vec<u8> = config
+            .get_item("pins")?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or_default();
+        let skip_pins: Vec<u8> = config
+            .get_item("skip_pins")?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or_default();
+        let pulldown: bool = config
+            .get_item("pulldown")?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or(false);
+        let debounce: u32 = config
+            .get_item("debounce")?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or(1);
 
         // Install an empty config (no peripherals) so bitmask tracking works
         // but dispatch_press is never called
         set_config(build_config(vec![], 50, 350));
 
         let gpio_config = gpio::GpioConfig { pins, pulldown, debounce_ms: debounce };
-        match gpio::GpioLoop::run(&gpio_config, &[]) {
+        match gpio::GpioLoop::run(&gpio_config, &skip_pins) {
             Ok(lp) => { self.gpio_loop = Some(lp); }
             Err(e) => return Err(pyo3::exceptions::PyRuntimeError::new_err(e.to_string())),
         }
+
+        // Start I2C drivers if enabled
+        #[cfg(feature = "i2c")]
+        {
+            if let Some(mcp_list) = config.get_item("i2c_mcp23017")? {
+                let list = mcp_list.downcast::<PyList>()?;
+                for item in list.iter() {
+                    let d = item.downcast::<PyDict>()?;
+                    let bus: u8 = d.get_item("bus")?.map(|v| v.extract()).transpose()?.unwrap_or(1);
+                    let addr: u8 = d.get_item("address")?.map(|v| v.extract()).transpose()?.unwrap_or(0x20);
+                    let int_pin: Option<u8> = d.get_item("int_pin")?.map(|v| v.extract()).transpose()?;
+                    
+                    if let Ok(mcp) = i2c::Mcp23017::new(bus, addr, int_pin) {
+                        let r = self.running.clone();
+                        self.i2c_threads.push(std::thread::spawn(move || mcp.poll(r)));
+                    }
+                }
+            }
+            if let Some(ads_list) = config.get_item("i2c_ads1115")? {
+                let list = ads_list.downcast::<PyList>()?;
+                for item in list.iter() {
+                    let d = item.downcast::<PyDict>()?;
+                    let bus: u8 = d.get_item("bus")?.map(|v| v.extract()).transpose()?.unwrap_or(1);
+                    let addr: u8 = d.get_item("address")?.map(|v| v.extract()).transpose()?.unwrap_or(0x48);
+                    
+                    if let Ok(ads) = i2c::Ads1115::new(bus, addr) {
+                        let r = self.running.clone();
+                        self.i2c_threads.push(std::thread::spawn(move || ads.poll(r)));
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 }

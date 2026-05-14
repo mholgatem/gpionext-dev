@@ -30,17 +30,37 @@ esac
 
 echo -e "${CYAN}Updating GPIOnext...${NONE}"
 
+# Fetch the latest release tag from GitHub API
+LATEST_TAG=$(curl -sf "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" \
+    | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/') || LATEST_TAG=""
+
+if [ -z "$LATEST_TAG" ]; then
+    echo -e "${RED}Could not fetch latest release tag. Aborting update.${NONE}"
+    exit 1
+fi
+
 # ---------------------------------------------------------------------------
-# Pull latest source
+# Update source
 # ---------------------------------------------------------------------------
 
 cd "$INSTALL_PATH"
-if [ -d ".git" ]; then
-    echo "Pulling latest source..."
-    git pull --ff-only
+echo "Fetching latest source from GitHub (${LATEST_TAG})..."
+
+# Download source tarball for the latest release
+SOURCE_URL="https://github.com/${GITHUB_REPO}/archive/refs/tags/${LATEST_TAG}.tar.gz"
+
+if curl -sfL "$SOURCE_URL" -o source.tar.gz; then
+    # Extract, skipping the top-level directory in the tarball
+    tar -xzf source.tar.gz --strip-components=1
+    rm source.tar.gz
+    
+    # Refresh CLI wrapper in /usr/bin
+    cp "${INSTALL_PATH}/usr-bin-gpionext" "/usr/bin/gpionext"
+    chmod 755 "/usr/bin/gpionext"
+    
+    echo -e "${GREEN}Source and CLI wrapper updated to ${LATEST_TAG}.${NONE}"
 else
-    echo -e "${RED}Not a git repo — skipping source update.${NONE}"
-    echo "To get source updates, re-run install.sh."
+    echo -e "${RED}Source update failed — keeping current source.${NONE}"
 fi
 
 # ---------------------------------------------------------------------------
@@ -50,23 +70,16 @@ fi
 BINARY_NAME="gpionext_core-${RUST_ARCH}.so"
 DEST="${INSTALL_PATH}/${BINARY_NAME}"
 
-LATEST_TAG=$(curl -sf "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" \
-    | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/') || LATEST_TAG=""
-
-if [ -z "$LATEST_TAG" ]; then
-    echo -e "${RED}Could not fetch latest release tag. Skipping binary update.${NONE}"
+BINARY_URL="https://github.com/${GITHUB_REPO}/releases/download/${LATEST_TAG}/${BINARY_NAME}"
+echo "Downloading binary: $BINARY_URL"
+if curl -sfL "$BINARY_URL" -o "${DEST}.tmp"; then
+    mv "${DEST}.tmp" "$DEST"
+    chmod 755 "$DEST"
+    ln -sf "$DEST" "${INSTALL_PATH}/gpionext_core.so"
+    echo -e "${GREEN}Binary updated to ${LATEST_TAG}.${NONE}"
 else
-    BINARY_URL="https://github.com/${GITHUB_REPO}/releases/download/${LATEST_TAG}/${BINARY_NAME}"
-    echo "Downloading $BINARY_URL..."
-    if curl -sfL "$BINARY_URL" -o "${DEST}.tmp"; then
-        mv "${DEST}.tmp" "$DEST"
-        chmod 755 "$DEST"
-        ln -sf "$DEST" "${INSTALL_PATH}/gpionext_core.so"
-        echo -e "${GREEN}Binary updated to ${LATEST_TAG}.${NONE}"
-    else
-        echo -e "${RED}Binary download failed — keeping current binary.${NONE}"
-        rm -f "${DEST}.tmp"
-    fi
+    echo -e "${RED}Binary download failed — keeping current binary.${NONE}"
+    rm -f "${DEST}.tmp"
 fi
 
 # ---------------------------------------------------------------------------
