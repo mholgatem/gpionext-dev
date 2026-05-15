@@ -17,6 +17,7 @@ Usage: gpionext config
        (invoked by /usr/bin/gpionext, runs this file via the venv python)
 """
 import argparse
+import curses
 import json
 import os
 import signal
@@ -165,8 +166,7 @@ class ConfigurationManager:
         """Stop GPIO monitor and optionally restart the daemon."""
         if self._core:
             self._core.stop()
-        answer = input(pcolor('cyan', '\nStart the GPIOnext daemon? [Y/n] ')).strip().lower()
-        if answer in ('', 'y', 'yes'):
+        if self._confirm('GPIOnext daemon', 'Start the GPIOnext daemon?', default_no=False):
             subprocess.call(('systemctl', 'start', 'gpionext'))
             print(pcolor('green', 'gpionext daemon started.'))
         else:
@@ -254,7 +254,7 @@ class ConfigurationManager:
                 return
             time.sleep(self.POLL_INTERVAL)
             if not prompted and (time.time() - start) > 3:
-                print(pcolor('cyan', '  Please release all buttons to continue'))
+                self._show_status('Release buttons', 'Please release all buttons to continue')
                 prompted = True
 
     # ---------------------------------------------------------------------------
@@ -286,23 +286,14 @@ class ConfigurationManager:
                 ('LEFT',  (0, -255)),
                 ('RIGHT', (0,  255)),
             ):
-                label = pcolor('cyan', f'DPAD {i} {direction}')
-                print(f'  Hold pin(s) for {label}: ', end='', flush=True)
-                pins = self.wait_for_pin()
-                pins_str = self._pins_to_str(pins)
-                print(f'→ {pins_str}')
-                self.wait_for_release()
+                label = f'DPAD {i} {direction}'
+                pins_str = self._capture_pins(label)
                 entries.append((device_name, f'DPAD {i} {direction}', 'AXIS',
                                 f'(3, {axis_code}, {value})', pins_str))
 
         # Buttons
         for btn_name, btn_code in selected_buttons:
-            label = pcolor('cyan', btn_name)
-            print(f'  Hold pin(s) for {label}: ', end='', flush=True)
-            pins = self.wait_for_pin()
-            pins_str = self._pins_to_str(pins)
-            print(f'→ {pins_str}')
-            self.wait_for_release()
+            pins_str = self._capture_pins(btn_name)
             entries.append((device_name, btn_name, 'BUTTON', str(btn_code), pins_str))
 
         print(pcolor('green', f'  Saving {device_name} configuration…'))
@@ -325,12 +316,7 @@ class ConfigurationManager:
         entries: list[tuple] = []
 
         for key_name, key_code in selected_keys:
-            label = pcolor('cyan', key_name)
-            print(f'  Hold pin(s) for {label}: ', end='', flush=True)
-            pins = self.wait_for_pin()
-            pins_str = self._pins_to_str(pins)
-            print(f'→ {pins_str}')
-            self.wait_for_release()
+            pins_str = self._capture_pins(key_name)
             entries.append((device_name, key_name, 'KEY', str(key_code), pins_str))
 
         print(pcolor('green', '  Saving Keyboard configuration…'))
@@ -362,41 +348,36 @@ class ConfigurationManager:
         options = [f"[{row['pins']}] {row['name']}: {row['command']}" for row in rows]
         selection = SelectionMenu.get_selection(options, "Select command to delete", parent=parent)
         if selection != -1:
-            confirm = input(f'  Delete {pcolor("red", rows[selection]["name"])}? [y/N]: ').strip().lower()
-            if confirm == 'y':
+            if self._confirm('Delete command', f'Delete {rows[selection]["name"]}?', parent=parent):
                 SQL.deleteEntry(rows[selection])
                 print(pcolor('green', '  Deleted.'))
 
     def _add_command(self) -> None:
         """Prompt for a new command name, shell command, and pin assignment."""
-        name = input('  Command name: ').strip()
+        name = self._text_input('Add command', 'Command name:')
         if not name:
             return
-        cmd = input('  Shell command (separate multiple with ;): ').strip()
+        cmd = self._text_input('Add command', 'Shell command (separate multiple with ;):')
         if not cmd:
             return
-        print(f'  Hold pin(s) to trigger {pcolor("cyan", name)}: ', end='', flush=True)
-        pins = self.wait_for_pin()
-        pins_str = self._pins_to_str(pins)
-        print(f'→ {pins_str}')
-        self.wait_for_release()
+        pins_str = self._capture_pins(f'trigger {name}')
         SQL.updateEntry({'id': None, 'device': 'Commands', 'name': name,
                          'type': 'COMMAND', 'command': cmd, 'pins': pins_str})
         print(pcolor('green', '  Command added.'))
 
     def _edit_command(self, row: dict) -> None:
         """Edit an existing command row (name, command string, or pin)."""
-        print(f'\n  Editing: {row["name"]}')
-        name = input(f'  Name [{row["name"]}]: ').strip() or row['name']
-        cmd = input(f'  Command [{row["command"]}]: ').strip() or row['command']
-        repin = input('  Re-assign pin? [y/N]: ').strip().lower()
+        name = self._text_input('Edit command', 'Name:', default=row['name'])
+        if name is None:
+            return
+        name = name or row['name']
+        cmd = self._text_input('Edit command', 'Command:', default=row['command'])
+        if cmd is None:
+            return
+        cmd = cmd or row['command']
         pins_str = row['pins']
-        if repin == 'y':
-            print('  Hold new pin(s): ', end='', flush=True)
-            pins = self.wait_for_pin()
-            pins_str = self._pins_to_str(pins)
-            print(f'→ {pins_str}')
-            self.wait_for_release()
+        if self._confirm('Edit command', 'Re-assign pin?'):
+            pins_str = self._capture_pins('new command pin(s)')
         SQL.updateEntry({'id': row['id'], 'device': 'Commands', 'name': name,
                          'type': 'COMMAND', 'command': cmd, 'pins': pins_str})
         print(pcolor('green', '  Updated.'))
@@ -421,19 +402,17 @@ class ConfigurationManager:
                 break
                 
             row = rows[selection]
-            print(f'\n  Editing: [{row["device"]}] {row["name"]} (pins={row["pins"]})')
-            action = input('  (r)e-assign pin  (d)elete  (b)ack: ').strip().lower()
+            action = self._choose_action(
+                f'Editing: [{row["device"]}] {row["name"]} (pins={row["pins"]})',
+                ['Re-assign pin', 'Delete', 'Back'],
+                parent=parent,
+            )
 
-            if action == 'd':
+            if action == 1:
                 SQL.deleteEntry(row)
                 print(pcolor('green', '  Deleted.'))
-            elif action == 'r':
-                print(f'  Hold new pin(s) for {pcolor("cyan", row["name"])}: ',
-                      end='', flush=True)
-                pins = self.wait_for_pin()
-                pins_str = self._pins_to_str(pins)
-                print(f'→ {pins_str}')
-                self.wait_for_release()
+            elif action == 0:
+                pins_str = self._capture_pins(row['name'])
                 row['pins'] = pins_str
                 SQL.updateEntry(row)
                 print(pcolor('green', '  Updated.'))
@@ -448,8 +427,7 @@ class ConfigurationManager:
         if selection == -1:
             return
         name = DEVICE_LIST[selection]
-        confirm = input(f'  Delete ALL mappings for {pcolor("red", name)}? [y/N]: ').strip().lower()
-        if confirm == 'y':
+        if self._confirm('Clear device', f'Delete ALL mappings for {name}?', parent=parent):
             SQL.deleteDevice(name)
             print(pcolor('green', f'  {name} cleared.'))
 
@@ -502,11 +480,11 @@ class ConfigurationManager:
 
     def _add_mcp23017(self) -> None:
         try:
-            bus_str = input('  I2C Bus [1]: ').strip() or '1'
+            bus_str = self._text_input('Add MCP23017', 'I2C Bus:', default='1') or '1'
             bus = int(bus_str)
-            addr_str = input('  I2C Address (hex) [0x20]: ').strip() or '0x20'
+            addr_str = self._text_input('Add MCP23017', 'I2C Address (hex):', default='0x20') or '0x20'
             addr = int(addr_str, 16)
-            int_pin_str = input('  Interrupt Pin (BOARD) [None]: ').strip()
+            int_pin_str = self._text_input('Add MCP23017', 'Interrupt Pin (BOARD):') or ''
             int_pin = int(int_pin_str) if int_pin_str else None
             SQL._cursor.execute('INSERT INTO I2C_MCP23017 (bus, address, int_pin) VALUES (?,?,?)', (bus, addr, int_pin))
             SQL._conn.commit()
@@ -541,9 +519,9 @@ class ConfigurationManager:
 
     def _add_ads1115(self) -> None:
         try:
-            bus_str = input('  I2C Bus [1]: ').strip() or '1'
+            bus_str = self._text_input('Add ADS1115', 'I2C Bus:', default='1') or '1'
             bus = int(bus_str)
-            addr_str = input('  I2C Address (hex) [0x48]: ').strip() or '0x48'
+            addr_str = self._text_input('Add ADS1115', 'I2C Address (hex):', default='0x48') or '0x48'
             addr = int(addr_str, 16)
             SQL._cursor.execute('INSERT INTO I2C_ADS1115 (bus, address) VALUES (?,?)', (bus, addr))
             SQL._conn.commit()
@@ -611,9 +589,11 @@ class ConfigurationManager:
             print(pcolor('red', '  Preset is empty or invalid.'))
             return
 
-        print(f'\n  Preset "{get_display_name(key)}" will create {len(rows)} mapping(s).')
-        confirm = input('  Overwrite existing mappings for affected devices? [y/N]: ').strip().lower()
-        if confirm != 'y':
+        if not self._confirm(
+            'Load HAT preset',
+            f'Preset "{get_display_name(key)}" will create {len(rows)} mapping(s). Overwrite existing mappings for affected devices?',
+            parent=parent,
+        ):
             return
 
         # Group by device name and replace each device
@@ -630,7 +610,7 @@ class ConfigurationManager:
     def _export_config(self) -> None:
         """Export the full config database to a JSON file."""
         default_path = '/opt/gpionext/config_backup.json'
-        path = input(f'  Export path [{default_path}]: ').strip() or default_path
+        path = self._text_input('Export config', 'Export path:', default=default_path) or default_path
         try:
             data = SQL.exportToJson()
             with open(path, 'w') as f:
@@ -641,7 +621,9 @@ class ConfigurationManager:
 
     def _import_config(self) -> None:
         """Import a config from a JSON file, replacing the current database."""
-        path = input('  Import file path: ').strip()
+        path = self._text_input('Import config', 'Import file path:')
+        if not path:
+            return
         if not os.path.isfile(path):
             print(pcolor('red', f'  File not found: {path}'))
             return
@@ -652,8 +634,7 @@ class ConfigurationManager:
             print(pcolor('red', f'  Failed to read file: {exc}'))
             return
 
-        confirm = input(f'  Replace current config with {len(data)} entries from {path}? [y/N]: ').strip().lower()
-        if confirm != 'y':
+        if not self._confirm('Import config', f'Replace current config with {len(data)} entries from {path}?'):
             return
         SQL.importFromJson(data, replace=True)
         print(pcolor('green', f'  Imported {len(data)} entries.'))
@@ -661,6 +642,80 @@ class ConfigurationManager:
     # ---------------------------------------------------------------------------
     # Selection helpers
     # ---------------------------------------------------------------------------
+
+    def _confirm(
+        self,
+        title: str,
+        message: str,
+        parent: CursesMenu = None,
+        default_no: bool = True,
+    ) -> bool:
+        """Ask a yes/no question with a SelectionMenu and return True for Yes."""
+        options = ["No", "Yes"] if default_no else ["Yes", "No"]
+        selection = SelectionMenu.get_selection(options, title, message, parent=parent)
+        return selection == (1 if default_no else 0)
+
+    def _choose_action(
+        self,
+        title: str,
+        options: list[str],
+        parent: CursesMenu = None,
+    ) -> int:
+        """Show an action list and return the selected option index, or -1."""
+        return SelectionMenu.get_selection(options, title, parent=parent)
+
+    def _text_input(
+        self,
+        title: str,
+        prompt: str,
+        default: str = "",
+        parent: CursesMenu = None,
+    ) -> str | None:
+        """Temporarily leave curses mode, read one line, then restore the menu."""
+        active_menu = parent or CursesMenu.currently_active_menu
+        had_curses = CursesMenu.stdscr is not None
+        suffix = f" [{default}]" if default else ""
+
+        try:
+            if had_curses:
+                curses.def_prog_mode()
+                curses.endwin()
+            print(f"\n{title}")
+            value = input(f"  {prompt}{suffix} ").strip()
+            return value or default
+        except (EOFError, KeyboardInterrupt):
+            return None
+        finally:
+            if had_curses:
+                curses.reset_prog_mode()
+                if active_menu and active_menu.screen:
+                    active_menu.draw()
+
+    def _show_status(self, title: str, message: str) -> None:
+        """Display a transient status message without leaving curses mode."""
+        if CursesMenu.stdscr is None:
+            print(f"{title}: {message}")
+            return
+
+        screen = CursesMenu.stdscr
+        max_rows, max_cols = screen.getmaxyx()
+        screen.erase()
+        screen.addstr(1, 2, title[: max_cols - 4], curses.A_STANDOUT)
+        for index, line in enumerate(message.splitlines() or [""]):
+            row = 3 + index
+            if row >= max_rows - 1:
+                break
+            screen.addstr(row, 2, line[: max_cols - 4])
+        screen.refresh()
+
+    def _capture_pins(self, label: str) -> str:
+        """Prompt for a GPIO hold, wait for capture/release, and return DB pin text."""
+        self._show_status('Waiting for GPIO input', f'Hold pin(s) for {label}')
+        pins = self.wait_for_pin()
+        pins_str = self._pins_to_str(pins)
+        self._show_status('Pin captured', f'{label}: {pins_str}\nRelease all buttons to continue')
+        self.wait_for_release()
+        return pins_str
 
     def _ask_axis_count(self, parent: CursesMenu = None) -> int:
         """
