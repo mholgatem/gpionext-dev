@@ -89,8 +89,14 @@ case "$1" in
 # ── Configuration ──────────────────────────────────────────────────────────
 
 "CONFIG")
-    # Pass any extra arguments through (e.g. --pulldown --pins 3,5,7)
-    sudo "$VENV_PYTHON" "$CONFIG_SCRIPT" "${@:2}"
+    # Extract daemon flags from ExecStart line (everything after gpionext.py)
+    if [ -f "$SERVICE_FILE" ]; then
+        EXEC_ARGS=$(grep '^ExecStart=' "$SERVICE_FILE" | sed -E 's/.*gpionext\.py[[:space:]]*//')
+    else
+        EXEC_ARGS=""
+    fi
+    # Pass daemon flags first, followed by manual CLI arguments for overrides
+    sudo "$VENV_PYTHON" "$CONFIG_SCRIPT" $EXEC_ARGS "${@:2}"
     ;;
 
 # ── Diagnostics ────────────────────────────────────────────────────────────
