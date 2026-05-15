@@ -746,12 +746,17 @@ class ConfigurationManager:
         Returns the selected (name, evdev_code) pairs.
         """
         names = [name for name, _ in BUTTON_LIST]
-        selected_names = MultiSelect.get_selection(names, "Select buttons to configure", "Space: toggle | Enter: continue", parent=parent)
-        
-        if not selected_names or selected_names == [-1]:
+        selected_labels = MultiSelect.get_selection(
+            names,
+            "Select buttons to configure",
+            "Space: toggle | Enter: continue",
+            parent=parent,
+        )
+        if selected_labels is None or selected_labels == [] or selected_labels == [-1]:
             return []
-        
-        return [btn for btn in BUTTON_LIST if btn[0] in selected_names]
+        selected_labels: set[str] = set(selected_labels)
+
+        return [btn for btn in BUTTON_LIST if btn[0] in selected_labels]
 
     def _select_keys_to_configure(self, parent: CursesMenu = None) -> list[tuple[str, int]]:
         """
@@ -759,12 +764,17 @@ class ConfigurationManager:
         Returns the selected (name, evdev_code) pairs.
         """
         names = [name for name, _ in KEY_LIST]
-        selected_names = MultiSelect.get_selection(names, "Select keys to configure", "Space: toggle | Enter: continue", parent=parent)
-        
-        if not selected_names or selected_names == [-1]:
+        selected_labels = MultiSelect.get_selection(
+            names,
+            "Select keys to configure",
+            "Space: toggle | Enter: continue",
+            parent=parent,
+        )
+        if selected_labels is None or selected_labels == [] or selected_labels == [-1]:
             return []
-            
-        return [key for key in KEY_LIST if key[0] in selected_names]
+        selected_labels: set[str] = set(selected_labels)
+
+        return [key for key in KEY_LIST if key[0] in selected_labels]
 
     # ---------------------------------------------------------------------------
     # Utilities
