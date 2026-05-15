@@ -194,7 +194,7 @@ class ConfigurationManager:
         menu.append_item(FunctionItem("Hardware settings", self._show_hardware_settings, [menu]))
         menu.append_item(FunctionItem("Load HAT preset", self._load_preset, [menu]))
         menu.append_item(FunctionItem("Export config (JSON)", self._export_config))
-        menu.append_item(FunctionItem("Import config (JSON)", self._import_config))
+        menu.append_item(FunctionItem("Import config (JSON)", self._import_config, [menu]))
 
         menu.show()
         self._cleanup()
@@ -299,7 +299,7 @@ class ConfigurationManager:
         print(pcolor('green', f'  Saving {device_name} configuration…'))
         SQL.deleteDevice(device_name)
         SQL.createDevice(entries)
-        print(pcolor('green', '  Done.'))
+        self._show_message('Joypad configuration', f'{device_name} configuration saved.', parent=parent)
 
     def _configure_keyboard(self, device_info: dict, parent: CursesMenu = None) -> None:
         """
@@ -322,7 +322,7 @@ class ConfigurationManager:
         print(pcolor('green', '  Saving Keyboard configuration…'))
         SQL.deleteDevice(device_name)
         SQL.createDevice(entries)
-        print(pcolor('green', '  Done.'))
+        self._show_message('Keyboard configuration', 'Keyboard configuration saved.', parent=parent)
 
     def _configure_commands(self, parent: CursesMenu = None) -> None:
         """Add, edit, or delete custom GPIO command mappings."""
@@ -332,9 +332,9 @@ class ConfigurationManager:
             
             for row in rows:
                 label = f"[{row['pins']}] {row['name']}: {row['command']}"
-                menu.append_item(FunctionItem(label, self._edit_command, [row], should_exit=True))
+                menu.append_item(FunctionItem(label, self._edit_command, [row, menu], should_exit=True))
             
-            menu.append_item(FunctionItem("Add new command", self._add_command, should_exit=True))
+            menu.append_item(FunctionItem("Add new command", self._add_command, [menu], should_exit=True))
             if rows:
                 menu.append_item(FunctionItem("Delete a command", self._delete_command_menu, [menu], should_exit=True))
             
@@ -350,37 +350,37 @@ class ConfigurationManager:
         if selection != -1:
             if self._confirm('Delete command', f'Delete {rows[selection]["name"]}?', parent=parent):
                 SQL.deleteEntry(rows[selection])
-                print(pcolor('green', '  Deleted.'))
+                self._show_message('Delete command', 'Command deleted.', parent=parent)
 
-    def _add_command(self) -> None:
+    def _add_command(self, parent: CursesMenu = None) -> None:
         """Prompt for a new command name, shell command, and pin assignment."""
-        name = self._text_input('Add command', 'Command name:')
+        name = self._text_input('Add command', 'Command name:', parent=parent)
         if not name:
             return
-        cmd = self._text_input('Add command', 'Shell command (separate multiple with ;):')
+        cmd = self._text_input('Add command', 'Shell command (separate multiple with ;):', parent=parent)
         if not cmd:
             return
         pins_str = self._capture_pins(f'trigger {name}')
         SQL.updateEntry({'id': None, 'device': 'Commands', 'name': name,
                          'type': 'COMMAND', 'command': cmd, 'pins': pins_str})
-        print(pcolor('green', '  Command added.'))
+        self._show_message('Add command', 'Command added.', parent=parent)
 
-    def _edit_command(self, row: dict) -> None:
+    def _edit_command(self, row: dict, parent: CursesMenu = None) -> None:
         """Edit an existing command row (name, command string, or pin)."""
-        name = self._text_input('Edit command', 'Name:', default=row['name'])
+        name = self._text_input('Edit command', 'Name:', default=row['name'], parent=parent)
         if name is None:
             return
         name = name or row['name']
-        cmd = self._text_input('Edit command', 'Command:', default=row['command'])
+        cmd = self._text_input('Edit command', 'Command:', default=row['command'], parent=parent)
         if cmd is None:
             return
         cmd = cmd or row['command']
         pins_str = row['pins']
-        if self._confirm('Edit command', 'Re-assign pin?'):
+        if self._confirm('Edit command', 'Re-assign pin?', parent=parent):
             pins_str = self._capture_pins('new command pin(s)')
         SQL.updateEntry({'id': row['id'], 'device': 'Commands', 'name': name,
                          'type': 'COMMAND', 'command': cmd, 'pins': pins_str})
-        print(pcolor('green', '  Updated.'))
+        self._show_message('Edit command', 'Command updated.', parent=parent)
 
     # ---------------------------------------------------------------------------
     # Edit existing mappings
@@ -391,8 +391,7 @@ class ConfigurationManager:
         while True:
             rows = SQL.getAllRows()
             if not rows:
-                print(pcolor('yellow', '  No mappings configured yet.'))
-                time.sleep(1)
+                self._show_message('Edit Existing Mappings', 'No mappings configured yet.', parent=parent)
                 return
 
             options = [f"[{row['device']:10}] {row['name']:20} pins={row['pins']}" for row in rows]
@@ -410,12 +409,14 @@ class ConfigurationManager:
 
             if action == 1:
                 SQL.deleteEntry(row)
-                print(pcolor('green', '  Deleted.'))
+                self._show_message('Edit Existing Mappings', 'Mapping deleted.', parent=parent)
+                continue
             elif action == 0:
                 pins_str = self._capture_pins(row['name'])
                 row['pins'] = pins_str
                 SQL.updateEntry(row)
-                print(pcolor('green', '  Updated.'))
+                self._show_message('Edit Existing Mappings', 'Mapping updated.', parent=parent)
+                continue
 
     # ---------------------------------------------------------------------------
     # Clear device
@@ -429,7 +430,7 @@ class ConfigurationManager:
         name = DEVICE_LIST[selection]
         if self._confirm('Clear device', f'Delete ALL mappings for {name}?', parent=parent):
             SQL.deleteDevice(name)
-            print(pcolor('green', f'  {name} cleared.'))
+            self._show_message('Clear device', f'{name} cleared.', parent=parent)
 
     def _show_hardware_settings(self, parent: CursesMenu = None) -> None:
         """Menu for I2C baudrate and chip management."""
@@ -470,7 +471,7 @@ class ConfigurationManager:
                 label = f"Bus {row['bus']}, Addr 0x{row['address']:02X}, Int Pin: {int_pin}"
                 menu.append_item(MenuItem(label)) # Just info for now, maybe add edit later
 
-            menu.append_item(FunctionItem("Add new chip", self._add_mcp23017, should_exit=True))
+            menu.append_item(FunctionItem("Add new chip", self._add_mcp23017, [menu], should_exit=True))
             if rows:
                 menu.append_item(FunctionItem("Delete a chip", self._delete_mcp23017_menu, [menu], should_exit=True))
             
@@ -478,19 +479,19 @@ class ConfigurationManager:
             if menu.selected_option == -1 or menu.selected_item == menu.exit_item:
                 break
 
-    def _add_mcp23017(self) -> None:
+    def _add_mcp23017(self, parent: CursesMenu = None) -> None:
         try:
-            bus_str = self._text_input('Add MCP23017', 'I2C Bus:', default='1') or '1'
+            bus_str = self._text_input('Add MCP23017', 'I2C Bus:', default='1', parent=parent) or '1'
             bus = int(bus_str)
-            addr_str = self._text_input('Add MCP23017', 'I2C Address (hex):', default='0x20') or '0x20'
+            addr_str = self._text_input('Add MCP23017', 'I2C Address (hex):', default='0x20', parent=parent) or '0x20'
             addr = int(addr_str, 16)
-            int_pin_str = self._text_input('Add MCP23017', 'Interrupt Pin (BOARD):') or ''
+            int_pin_str = self._text_input('Add MCP23017', 'Interrupt Pin (BOARD):', parent=parent) or ''
             int_pin = int(int_pin_str) if int_pin_str else None
             SQL._cursor.execute('INSERT INTO I2C_MCP23017 (bus, address, int_pin) VALUES (?,?,?)', (bus, addr, int_pin))
             SQL._conn.commit()
-            print(pcolor('green', '  Chip added.'))
+            self._show_message('Add MCP23017', 'Chip added.', parent=parent)
         except ValueError:
-            print(pcolor('red', '  Invalid input.'))
+            self._show_message('Add MCP23017', 'Invalid input.', parent=parent)
 
     def _delete_mcp23017_menu(self, parent: CursesMenu = None) -> None:
         rows = SQL._cursor.execute('SELECT * FROM I2C_MCP23017').fetchall()
@@ -499,7 +500,7 @@ class ConfigurationManager:
         if selection != -1:
             SQL._cursor.execute('DELETE FROM I2C_MCP23017 WHERE id = ?', (rows[selection]['id'],))
             SQL._conn.commit()
-            print(pcolor('green', '  Deleted.'))
+            self._show_message('Delete MCP23017', 'Chip deleted.', parent=parent)
 
     def _manage_ads1115(self, parent: CursesMenu = None) -> None:
         while True:
@@ -509,7 +510,7 @@ class ConfigurationManager:
                 label = f"Bus {row['bus']}, Addr 0x{row['address']:02X}"
                 menu.append_item(MenuItem(label))
 
-            menu.append_item(FunctionItem("Add new chip", self._add_ads1115, should_exit=True))
+            menu.append_item(FunctionItem("Add new chip", self._add_ads1115, [menu], should_exit=True))
             if rows:
                 menu.append_item(FunctionItem("Delete a chip", self._delete_ads1115_menu, [menu], should_exit=True))
             
@@ -517,17 +518,17 @@ class ConfigurationManager:
             if menu.selected_option == -1 or menu.selected_item == menu.exit_item:
                 break
 
-    def _add_ads1115(self) -> None:
+    def _add_ads1115(self, parent: CursesMenu = None) -> None:
         try:
-            bus_str = self._text_input('Add ADS1115', 'I2C Bus:', default='1') or '1'
+            bus_str = self._text_input('Add ADS1115', 'I2C Bus:', default='1', parent=parent) or '1'
             bus = int(bus_str)
-            addr_str = self._text_input('Add ADS1115', 'I2C Address (hex):', default='0x48') or '0x48'
+            addr_str = self._text_input('Add ADS1115', 'I2C Address (hex):', default='0x48', parent=parent) or '0x48'
             addr = int(addr_str, 16)
             SQL._cursor.execute('INSERT INTO I2C_ADS1115 (bus, address) VALUES (?,?)', (bus, addr))
             SQL._conn.commit()
-            print(pcolor('green', '  Chip added.'))
+            self._show_message('Add ADS1115', 'Chip added.', parent=parent)
         except ValueError:
-            print(pcolor('red', '  Invalid input.'))
+            self._show_message('Add ADS1115', 'Invalid input.', parent=parent)
 
     def _delete_ads1115_menu(self, parent: CursesMenu = None) -> None:
         rows = SQL._cursor.execute('SELECT * FROM I2C_ADS1115').fetchall()
@@ -536,7 +537,7 @@ class ConfigurationManager:
         if selection != -1:
             SQL._cursor.execute('DELETE FROM I2C_ADS1115 WHERE id = ?', (rows[selection]['id'],))
             SQL._conn.commit()
-            print(pcolor('green', '  Deleted.'))
+            self._show_message('Delete ADS1115', 'Chip deleted.', parent=parent)
 
     # ---------------------------------------------------------------------------
     # Live pin monitor
@@ -586,7 +587,7 @@ class ConfigurationManager:
         key = keys[selection]
         rows = preset_to_db_rows(key)
         if not rows:
-            print(pcolor('red', '  Preset is empty or invalid.'))
+            self._show_message('Load HAT preset', 'Preset is empty or invalid.', parent=parent)
             return
 
         if not self._confirm(
@@ -601,7 +602,7 @@ class ConfigurationManager:
         for device_name in devices_affected:
             SQL.deleteDevice(device_name)
         SQL.createDevice(rows)
-        print(pcolor('green', f'  Preset "{get_display_name(key)}" applied.'))
+        self._show_message('Load HAT preset', f'Preset "{get_display_name(key)}" applied.', parent=parent)
 
     # ---------------------------------------------------------------------------
     # Import / Export
@@ -619,29 +620,38 @@ class ConfigurationManager:
         except OSError as exc:
             print(pcolor('red', f'  Export failed: {exc}'))
 
-    def _import_config(self) -> None:
+    def _import_config(self, parent: CursesMenu = None) -> None:
         """Import a config from a JSON file, replacing the current database."""
-        path = self._text_input('Import config', 'Import file path:')
+        path = self._text_input('Import config', 'Import file path:', parent=parent)
         if not path:
             return
         if not os.path.isfile(path):
-            print(pcolor('red', f'  File not found: {path}'))
+            self._show_message('Import config', f'File not found: {path}', parent=parent)
             return
         try:
             with open(path) as f:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError) as exc:
-            print(pcolor('red', f'  Failed to read file: {exc}'))
+            self._show_message('Import config', f'Failed to read file: {exc}', parent=parent)
             return
 
-        if not self._confirm('Import config', f'Replace current config with {len(data)} entries from {path}?'):
+        if not self._confirm('Import config', f'Replace current config with {len(data)} entries from {path}?', parent=parent):
             return
         SQL.importFromJson(data, replace=True)
-        print(pcolor('green', f'  Imported {len(data)} entries.'))
+        self._show_message('Import config', f'Imported {len(data)} entries.', parent=parent)
 
     # ---------------------------------------------------------------------------
     # Selection helpers
     # ---------------------------------------------------------------------------
+
+    def _show_message(
+        self,
+        title: str,
+        message: str,
+        parent: CursesMenu = None,
+    ) -> None:
+        """Show a menu-safe one-button message and wait for acknowledgement."""
+        SelectionMenu.get_selection(["OK"], title, message, parent=parent)
 
     def _confirm(
         self,
