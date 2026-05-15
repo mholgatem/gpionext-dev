@@ -52,12 +52,11 @@ def _build_pin_labels(all_pins: list[int], db_rows: list[dict]) -> dict[int, str
     labels: dict[int, str] = {p: 'unmapped' for p in all_pins}
 
     for row in db_rows:
-        raw_pins = row.get('pins', '')
-        try:
-            pins_val = eval(raw_pins)
-            pin_list = [pins_val] if isinstance(pins_val, int) else list(pins_val)
-        except Exception:
-            continue
+        pin_list = []
+        for parsed_pin in SQL.parse_pins_value(row.get('pins', '')):
+            vpin = SQL.pin_value_to_vpin(parsed_pin)
+            if vpin is not None:
+                pin_list.append(vpin)
 
         label = f"{row['device']} \u2192 {row['name']}"
         for pin in pin_list:

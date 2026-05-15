@@ -1,7 +1,7 @@
 # Project Log
 
 ## Status
-Active — MultiSelect button/key configuration now normalizes cancellation results and compares selections by label sets.
+Active — Stored pin parsing is now centralized and safe, with physical and virtual pins normalized consistently for runtime and UI display.
 
 ## Last Updated
 2026-05-15
@@ -11,6 +11,7 @@ Active — MultiSelect button/key configuration now normalizes cancellation resu
 - The UI is built around the vendored `cursesmenu` package (`CursesMenu`, `SelectionMenu`, and `MultiSelect`) for menu navigation.
 - GPIO pin detection flows through `gpionext_core` when available, with `ConfigurationManager.wait_for_pin()` polling pin states and `wait_for_release()` blocking until release.
 - Configuration data is persisted through `config.SQL`, including device mappings, command mappings, I2C chip configuration, and JSON import/export.
+- Stored DB `pins` values are parsed through shared `config.SQL` helpers so single pins, tuple/list combos, and virtual I2C strings are handled without `eval`.
 - Full-screen live monitoring is delegated to `python/ui/live_pin_view.py`; the main config manager owns menu workflows and database writes.
 
 ## Completed Milestones
@@ -26,6 +27,8 @@ Active — MultiSelect button/key configuration now normalizes cancellation resu
 - [x] Replaced the no-mappings `time.sleep(1)` feedback path in `_edit_existing()` with a menu-safe `_show_message()` prompt.
 - [x] Corrected `CursesMenu.selected_item` to return `items[selected_option]` while preserving the existing no-selection guard, improving callers that compare selected items against `exit_item`.
 - [x] Normalized `MultiSelect` button/key selections in `config_manager.py`, treating `None`, `[]`, and `[-1]` as cancellation and comparing valid item labels via `set[str]`.
+- [x] Added shared safe pin parsing/formatting helpers in `config.SQL` and replaced DB pin `eval()` parsing in runtime config and live pin labels.
+- [x] Updated menu display paths to format stored physical and virtual pins consistently via the shared parser.
 
 ## Known Issues & Lessons Learned
 - Nested curses selection menus should receive the immediate active submenu as `parent`; passing the grandparent can break return/redraw behavior when exiting child menus.
@@ -37,3 +40,4 @@ Active — MultiSelect button/key configuration now normalizes cancellation resu
 - Direct `print()` calls are poor UI feedback while curses menus are active; future status/success/error feedback in menu workflows should prefer `_show_message()` or `_show_status()` depending on whether acknowledgement is needed.
 - `selected_item` must reflect `selected_option`, not the currently highlighted `current_option`; callers may compare `menu.selected_item == menu.exit_item` after selection handling changes the highlighted row.
 - `MultiSelect.get_selection()` returns selected item labels for successful selections, but may return sentinel cancellation values (`None`, `[]`, or `[-1]`); normalize those sentinels before converting labels to a comparison set.
+- Stored DB `pins` values may be plain integers, tuple/list strings, quoted numeric strings, or virtual I2C identifiers; future parsing should use `SQL.parse_pins_value()`/`SQL.pin_value_to_vpin()` rather than `eval()`.

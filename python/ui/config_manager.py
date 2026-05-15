@@ -331,7 +331,7 @@ class ConfigurationManager:
             rows = SQL.getDeviceRaw('Commands')
             
             for row in rows:
-                label = f"[{row['pins']}] {row['name']}: {row['command']}"
+                label = f"[{SQL.format_pins_value(row['pins'])}] {row['name']}: {row['command']}"
                 menu.append_item(FunctionItem(label, self._edit_command, [row, menu], should_exit=True))
             
             menu.append_item(FunctionItem("Add new command", self._add_command, [menu], should_exit=True))
@@ -345,7 +345,7 @@ class ConfigurationManager:
     def _delete_command_menu(self, parent: CursesMenu = None) -> None:
         """Sub-menu to select a command for deletion."""
         rows = SQL.getDeviceRaw('Commands')
-        options = [f"[{row['pins']}] {row['name']}: {row['command']}" for row in rows]
+        options = [f"[{SQL.format_pins_value(row['pins'])}] {row['name']}: {row['command']}" for row in rows]
         selection = SelectionMenu.get_selection(options, "Select command to delete", parent=parent)
         if selection != -1:
             if self._confirm('Delete command', f'Delete {rows[selection]["name"]}?', parent=parent):
@@ -394,7 +394,7 @@ class ConfigurationManager:
                 self._show_message('Edit Existing Mappings', 'No mappings configured yet.', parent=parent)
                 return
 
-            options = [f"[{row['device']:10}] {row['name']:20} pins={row['pins']}" for row in rows]
+            options = [f"[{row['device']:10}] {row['name']:20} pins={SQL.format_pins_value(row['pins'])}" for row in rows]
             selection = SelectionMenu.get_selection(options, "Edit Existing Mappings", parent=parent)
             
             if selection == -1:
@@ -402,7 +402,7 @@ class ConfigurationManager:
                 
             row = rows[selection]
             action = self._choose_action(
-                f'Editing: [{row["device"]}] {row["name"]} (pins={row["pins"]})',
+                f'Editing: [{row["device"]}] {row["name"]} (pins={SQL.format_pins_value(row["pins"])})',
                 ['Re-assign pin', 'Delete', 'Back'],
                 parent=parent,
             )
