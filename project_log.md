@@ -1,7 +1,7 @@
 # Project Log
 
 ## Status
-Active — config manager SQL mutation feedback is menu-safe and SQL-backed submenus refresh after mutations.
+Active — curses menu selected-item tracking now returns the selected option, making exit-item comparisons reliable after navigation changes.
 
 ## Last Updated
 2026-05-15
@@ -24,6 +24,7 @@ Active — config manager SQL mutation feedback is menu-safe and SQL-backed subm
 - [x] Replaced SQL mutation success/error `print()` feedback in config manager workflows with `_show_message()`.
 - [x] Ensured SQL-backed command, mapping, MCP23017, and ADS1115 management loops return to their rebuild loops after mutating actions so fresh rows are fetched.
 - [x] Replaced the no-mappings `time.sleep(1)` feedback path in `_edit_existing()` with a menu-safe `_show_message()` prompt.
+- [x] Corrected `CursesMenu.selected_item` to return `items[selected_option]` while preserving the existing no-selection guard, improving callers that compare selected items against `exit_item`.
 
 ## Known Issues & Lessons Learned
 - Nested curses selection menus should receive the immediate active submenu as `parent`; passing the grandparent can break return/redraw behavior when exiting child menus.
@@ -33,3 +34,4 @@ Active — config manager SQL mutation feedback is menu-safe and SQL-backed subm
 - Direct terminal `input()` calls conflict with curses menu rendering; future text prompts should use `_text_input()` rather than adding new raw prompts.
 - Direct yes/no `input()` prompts drift from menu UX; future confirmations should use `_confirm()`.
 - Direct `print()` calls are poor UI feedback while curses menus are active; future status/success/error feedback in menu workflows should prefer `_show_message()` or `_show_status()` depending on whether acknowledgement is needed.
+- `selected_item` must reflect `selected_option`, not the currently highlighted `current_option`; callers may compare `menu.selected_item == menu.exit_item` after selection handling changes the highlighted row.

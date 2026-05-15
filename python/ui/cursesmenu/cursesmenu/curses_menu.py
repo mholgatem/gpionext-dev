@@ -81,7 +81,7 @@ class CursesMenu(object):
 		:rtype: MenuItem|None
 		"""
 		if self.items and self.selected_option != -1:
-			return self.items[self.current_option]
+			return self.items[self.selected_option]
 		else:
 			return None
 
