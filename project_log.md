@@ -1,7 +1,7 @@
 # Project Log
 
 ## Status
-Active — Pin-capture errors are surfaced as persistent curses messages, transient status drawing is guarded, and the live pin monitor now restores menu color pairs before returning.
+Active — Multi-select joystick/key configuration now returns selected labels without indexing menu items by a list, while earlier curses pin-capture and live-monitor safeguards remain in place.
 
 ## Last Updated
 2026-05-15
@@ -41,8 +41,11 @@ Active — Pin-capture errors are surfaced as persistent curses messages, transi
 - [x] Added persistent GPIO capture/release error dialogs so exceptions while waiting for pin input are visible before configuration aborts.
 - [x] Guarded transient pin-capture status rendering against curses drawing failures on constrained terminals.
 - [x] Restored parent menu curses color pairs after returning from the live pin monitor so main-menu text does not inherit green monitor colors.
+- [x] Fixed `MultiSelect.select_many()` so pressing Enter after selecting joystick buttons/keys stores the selected labels directly and runs the current menu item lifecycle without calling `selected_item` with a list-valued selection.
+- [x] Added unit tests covering MultiSelect checked-label submission and exit/cancel behavior.
 
 ## Known Issues & Lessons Learned
+- Multi-select menus intentionally use `selected_option` as a list of selected labels; do not route that list through `CursesMenu.selected_item`, which expects an integer index.
 - Nested curses selection menus should receive the immediate active submenu as `parent`; passing the grandparent can break return/redraw behavior when exiting child menus.
 - SQL-backed menus should exit child selections after mutating actions and re-enter their outer loops so displayed rows are fetched from the database again.
 - `python -m py_compile` creates `__pycache__` files; remove those generated artifacts before committing.
