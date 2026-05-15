@@ -96,11 +96,15 @@ class LivePinView:
         return self
 
     def __exit__(self, *args) -> None:
-        pass  # curses.wrapper handles cleanup
+        pass  # The caller owns curses setup/cleanup.
 
     def run(self) -> None:
-        """Launch the full-screen pin monitor. Blocks until user presses q/ESC."""
-        curses.wrapper(self._curses_main)
+        """Launch the standalone pin monitor for direct/manual use."""
+        curses.wrapper(self.run_in_window)
+
+    def run_in_window(self, stdscr: curses.window) -> None:
+        """Draw the live monitor using an existing curses screen."""
+        self._curses_main(stdscr)
 
     def _curses_main(self, stdscr: curses.window) -> None:
         """
