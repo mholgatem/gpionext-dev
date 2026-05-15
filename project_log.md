@@ -1,7 +1,7 @@
 # Project Log
 
 ## Status
-Active — Stored pin parsing is now centralized and safe, with physical and virtual pins normalized consistently for runtime and UI display.
+Active — GPIO capture in the configuration UI now fails safely when the monitor is unavailable, supports timeout retry/cancel, and aborts in-progress mapping workflows without saving partial pin data.
 
 ## Last Updated
 2026-05-15
@@ -10,6 +10,7 @@ Active — Stored pin parsing is now centralized and safe, with physical and vir
 - `python/ui/config_manager.py` provides the interactive GPIOnext configuration UI.
 - The UI is built around the vendored `cursesmenu` package (`CursesMenu`, `SelectionMenu`, and `MultiSelect`) for menu navigation.
 - GPIO pin detection flows through `gpionext_core` when available, with `ConfigurationManager.wait_for_pin()` polling pin states and `wait_for_release()` blocking until release.
+- GPIO capture UI is centralized through `_capture_pins()`, which now treats an empty pin list as cancellation/unavailability and lets callers abort cleanly before database writes.
 - Configuration data is persisted through `config.SQL`, including device mappings, command mappings, I2C chip configuration, and JSON import/export.
 - Stored DB `pins` values are parsed through shared `config.SQL` helpers so single pins, tuple/list combos, and virtual I2C strings are handled without `eval`.
 - Full-screen live monitoring is delegated to `python/ui/live_pin_view.py`; the main config manager owns menu workflows and database writes.
@@ -29,6 +30,9 @@ Active — Stored pin parsing is now centralized and safe, with physical and vir
 - [x] Normalized `MultiSelect` button/key selections in `config_manager.py`, treating `None`, `[]`, and `[-1]` as cancellation and comparing valid item labels via `set[str]`.
 - [x] Added shared safe pin parsing/formatting helpers in `config.SQL` and replaced DB pin `eval()` parsing in runtime config and live pin labels.
 - [x] Updated menu display paths to format stored physical and virtual pins consistently via the shared parser.
+- [x] Added monitor availability checks to `wait_for_pin()` and `wait_for_release()` so GPIO polling is skipped when `_HAS_CORE` is false or no core instance is active.
+- [x] Added a 30-second default GPIO capture timeout with retry/cancel handling in `wait_for_pin()`.
+- [x] Updated joypad, keyboard, command, and existing-mapping edit workflows to abort without saving when pin capture returns no pins.
 
 ## Known Issues & Lessons Learned
 - Nested curses selection menus should receive the immediate active submenu as `parent`; passing the grandparent can break return/redraw behavior when exiting child menus.
@@ -41,3 +45,4 @@ Active — Stored pin parsing is now centralized and safe, with physical and vir
 - `selected_item` must reflect `selected_option`, not the currently highlighted `current_option`; callers may compare `menu.selected_item == menu.exit_item` after selection handling changes the highlighted row.
 - `MultiSelect.get_selection()` returns selected item labels for successful selections, but may return sentinel cancellation values (`None`, `[]`, or `[-1]`); normalize those sentinels before converting labels to a comparison set.
 - Stored DB `pins` values may be plain integers, tuple/list strings, quoted numeric strings, or virtual I2C identifiers; future parsing should use `SQL.parse_pins_value()`/`SQL.pin_value_to_vpin()` rather than `eval()`.
+- GPIO capture callers must treat an empty `wait_for_pin()` result as cancellation/unavailability and skip database writes to avoid saving empty or invalid pin mappings.
