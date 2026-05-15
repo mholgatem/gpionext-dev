@@ -81,19 +81,24 @@ class MultiSelect(CursesMenu):
 		"""
 		Select multiple items
 		"""
-		
+
 		current_item = self.items[self.current_option]
 		if isinstance(current_item, SelectionItem):
-			self.selected_option = [x.defaultText for x in self.items if isinstance(x, SelectionItem) and getattr(x, 'checked', False)]
+			selected_labels = [
+				x.defaultText
+				for x in self.items
+				if isinstance(x, SelectionItem) and getattr(x, 'checked', False)
+			]
 		else:
 			# Likely the exit item
-			self.selected_option = [-1]
+			selected_labels = [-1]
 
-		self.selected_item.set_up()
-		self.selected_item.action()
-		self.selected_item.clean_up()
-		self.returned_value = self.selected_item.get_return()
-		self.should_exit = self.selected_item.should_exit
+		current_item.set_up()
+		current_item.action()
+		current_item.clean_up()
+		self.selected_option = selected_labels
+		self.returned_value = selected_labels
+		self.should_exit = current_item.should_exit
 
 		if not self.should_exit:
 			self.draw()
