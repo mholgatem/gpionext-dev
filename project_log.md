@@ -1,7 +1,7 @@
 # Project Log
 
 ## Status
-Active — The live pin monitor now reuses the configuration menu's existing curses screen/lifecycle so the parent menu can resume cleanly without nested curses.wrapper() calls.
+Active — Remaining config-manager yes/no/action prompts have been normalized into curses menu selections, while free-form input is limited to required text/path/I2C value entry.
 
 ## Last Updated
 2026-05-15
@@ -35,6 +35,9 @@ Active — The live pin monitor now reuses the configuration menu's existing cur
 - [x] Updated joypad, keyboard, command, and existing-mapping edit workflows to abort without saving when pin capture returns no pins.
 - [x] Updated the live pin monitor to expose `LivePinView.run_in_window(stdscr)` for drawing into an existing curses screen while keeping `run()` as the standalone/manual `curses.wrapper()` entry point.
 - [x] Routed the configuration menu's live pin monitor through a shared fullscreen curses helper that restores blocking input state, clears/refreshes the parent screen, and avoids nested wrappers when returning to the menu.
+- [x] Replaced daemon restart, command pin reassignment, delete/overwrite/import confirmations, and existing-mapping action prompts with explicit `SelectionMenu` option menus.
+- [x] Extended `_confirm()` to support custom two-option labels while preserving its existing default/no ordering behavior.
+- [x] Replaced free-form MCP23017 interrupt-pin entry with a menu choice plus GPIO capture so only command/path/I2C bus/address fields remain raw text inputs.
 
 ## Known Issues & Lessons Learned
 - Nested curses selection menus should receive the immediate active submenu as `parent`; passing the grandparent can break return/redraw behavior when exiting child menus.
@@ -43,6 +46,7 @@ Active — The live pin monitor now reuses the configuration menu's existing cur
 - The repository currently has an untracked `core/Cargo.lock` that was not created by this task and should not be committed unless intentionally requested.
 - Direct terminal `input()` calls conflict with curses menu rendering; future text prompts should use `_text_input()` rather than adding new raw prompts.
 - Direct yes/no `input()` prompts drift from menu UX; future confirmations should use `_confirm()`.
+- Confirmation menus should use action-specific labels (for example `Delete mappings`/`Keep mappings`) instead of generic yes/no text when the action can be made explicit.
 - Direct `print()` calls are poor UI feedback while curses menus are active; future status/success/error feedback in menu workflows should prefer `_show_message()` or `_show_status()` depending on whether acknowledgement is needed.
 - `selected_item` must reflect `selected_option`, not the currently highlighted `current_option`; callers may compare `menu.selected_item == menu.exit_item` after selection handling changes the highlighted row.
 - `MultiSelect.get_selection()` returns selected item labels for successful selections, but may return sentinel cancellation values (`None`, `[]`, or `[-1]`); normalize those sentinels before converting labels to a comparison set.

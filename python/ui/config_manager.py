@@ -166,7 +166,13 @@ class ConfigurationManager:
         """Stop GPIO monitor and optionally restart the daemon."""
         if self._core:
             self._core.stop()
-        if self._confirm('GPIOnext daemon', 'Start the GPIOnext daemon?', default_no=False):
+        if self._confirm(
+            'GPIOnext daemon',
+            'Choose whether to start the GPIOnext daemon now.',
+            confirm_label='Start daemon',
+            cancel_label='Leave stopped',
+            default_no=False,
+        ):
             subprocess.call(('systemctl', 'start', 'gpionext'))
             print(pcolor('green', 'gpionext daemon started.'))
         else:
@@ -381,7 +387,13 @@ class ConfigurationManager:
         options = [f"[{SQL.format_pins_value(row['pins'])}] {row['name']}: {row['command']}" for row in rows]
         selection = SelectionMenu.get_selection(options, "Select command to delete", parent=parent)
         if selection != -1:
-            if self._confirm('Delete command', f'Delete {rows[selection]["name"]}?', parent=parent):
+            if self._confirm(
+                'Delete command',
+                f'Delete {rows[selection]["name"]}?',
+                parent=parent,
+                confirm_label='Delete command',
+                cancel_label='Keep command',
+            ):
                 SQL.deleteEntry(rows[selection])
                 self._show_message('Delete command', 'Command deleted.', parent=parent)
 
@@ -412,7 +424,12 @@ class ConfigurationManager:
             return
         cmd = cmd or row['command']
         pins_str = row['pins']
-        if self._confirm('Edit command', 'Re-assign pin?', parent=parent):
+        pin_action = self._choose_action(
+            'Edit command pin',
+            ['Keep existing pin', 'Re-assign pin'],
+            parent=parent,
+        )
+        if pin_action == 1:
             pins_str = self._capture_pins('new command pin(s)')
             if pins_str is None:
                 self._show_message('Edit command', 'Pin capture cancelled; command was not updated.', parent=parent)
@@ -442,7 +459,7 @@ class ConfigurationManager:
             row = rows[selection]
             action = self._choose_action(
                 f'Editing: [{row["device"]}] {row["name"]} (pins={SQL.format_pins_value(row["pins"])})',
-                ['Re-assign pin', 'Delete', 'Back'],
+                ['Re-assign pin', 'Delete mapping', 'Back'],
                 parent=parent,
             )
 
@@ -470,7 +487,13 @@ class ConfigurationManager:
         if selection == -1:
             return
         name = DEVICE_LIST[selection]
-        if self._confirm('Clear device', f'Delete ALL mappings for {name}?', parent=parent):
+        if self._confirm(
+            'Clear device',
+            f'Delete ALL mappings for {name}?',
+            parent=parent,
+            confirm_label='Delete mappings',
+            cancel_label='Keep mappings',
+        ):
             SQL.deleteDevice(name)
             self._show_message('Clear device', f'{name} cleared.', parent=parent)
 
@@ -521,14 +544,38 @@ class ConfigurationManager:
             if menu.selected_option == -1 or menu.selected_item == menu.exit_item:
                 break
 
+    def _choose_mcp23017_interrupt_pin(self, parent: CursesMenu = None) -> int | None:
+        """Choose whether to assign an MCP23017 interrupt pin via GPIO capture."""
+        selection = self._choose_action(
+            'MCP23017 interrupt pin',
+            ['No interrupt pin', 'Capture interrupt pin'],
+            parent=parent,
+        )
+        if selection != 1:
+            return None
+
+        self._show_status('Waiting for GPIO input', 'Hold one BOARD pin for MCP23017 interrupt')
+        pins = self.wait_for_pin()
+        if not pins:
+            self._show_message('Add MCP23017', 'Interrupt pin capture cancelled; chip will be added without one.', parent=parent)
+            return None
+        if len(pins) > 1:
+            self._show_message('Add MCP23017', 'Multiple pins were captured; chip will be added without an interrupt pin.', parent=parent)
+            self.wait_for_release()
+            return None
+
+        int_pin = pins[0]
+        self._show_status('Pin captured', f'MCP23017 interrupt pin: {int_pin}\nRelease all buttons to continue')
+        self.wait_for_release()
+        return int_pin
+
     def _add_mcp23017(self, parent: CursesMenu = None) -> None:
         try:
             bus_str = self._text_input('Add MCP23017', 'I2C Bus:', default='1', parent=parent) or '1'
             bus = int(bus_str)
             addr_str = self._text_input('Add MCP23017', 'I2C Address (hex):', default='0x20', parent=parent) or '0x20'
             addr = int(addr_str, 16)
-            int_pin_str = self._text_input('Add MCP23017', 'Interrupt Pin (BOARD):', parent=parent) or ''
-            int_pin = int(int_pin_str) if int_pin_str else None
+            int_pin = self._choose_mcp23017_interrupt_pin(parent=parent)
             SQL._cursor.execute('INSERT INTO I2C_MCP23017 (bus, address, int_pin) VALUES (?,?,?)', (bus, addr, int_pin))
             SQL._conn.commit()
             self._show_message('Add MCP23017', 'Chip added.', parent=parent)
@@ -636,6 +683,8 @@ class ConfigurationManager:
             'Load HAT preset',
             f'Preset "{get_display_name(key)}" will create {len(rows)} mapping(s). Overwrite existing mappings for affected devices?',
             parent=parent,
+            confirm_label='Overwrite mappings',
+            cancel_label='Cancel preset',
         ):
             return
 
@@ -677,7 +726,13 @@ class ConfigurationManager:
             self._show_message('Import config', f'Failed to read file: {exc}', parent=parent)
             return
 
-        if not self._confirm('Import config', f'Replace current config with {len(data)} entries from {path}?', parent=parent):
+        if not self._confirm(
+            'Import config',
+            f'Replace current config with {len(data)} entries from {path}?',
+            parent=parent,
+            confirm_label='Replace config',
+            cancel_label='Cancel import',
+        ):
             return
         SQL.importFromJson(data, replace=True)
         self._show_message('Import config', f'Imported {len(data)} entries.', parent=parent)
@@ -731,9 +786,11 @@ class ConfigurationManager:
         message: str,
         parent: CursesMenu = None,
         default_no: bool = True,
+        confirm_label: str = "Yes",
+        cancel_label: str = "No",
     ) -> bool:
-        """Ask a yes/no question with a SelectionMenu and return True for Yes."""
-        options = ["No", "Yes"] if default_no else ["Yes", "No"]
+        """Ask a two-option question and return True for the confirm action."""
+        options = [cancel_label, confirm_label] if default_no else [confirm_label, cancel_label]
         selection = SelectionMenu.get_selection(options, title, message, parent=parent)
         return selection == (1 if default_no else 0)
 
