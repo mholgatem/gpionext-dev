@@ -204,24 +204,48 @@ class ConfigurationManager:
     # Pin detection
     # ---------------------------------------------------------------------------
 
-    def wait_for_pin(self) -> list[int]:
+    def wait_for_pin(self, timeout_seconds: float | None = 30) -> list[int]:
         """
         Block until the user holds at least one GPIO pin for HOLD_SECONDS.
         Uses gpionext_core.get_pin_states() to poll the bitmask.
         Returns the list of BOARD pins currently held when the hold threshold
-        is reached.
+        is reached, or an empty list when capture is unavailable or cancelled.
+
+        Parameters:
+            timeout_seconds (float | None): seconds to wait before offering retry/cancel.
+                Use None to wait indefinitely.
 
         Returns:
             list[int]: BOARD pin numbers that were held (one or more for combos)
         """
+        if not _HAS_CORE or self._core is None:
+            self._show_message(
+                'GPIO monitor unavailable',
+                'Pin detection is disabled because the GPIO monitor is unavailable.',
+            )
+            return []
+
         hold_start: float | None = None
         last_bitmask: int = 0
+        capture_start = time.time()
 
         while True:
-            if _HAS_CORE:
-                bitmask = gpionext_core.get_pin_states()
-            else:
-                bitmask = 0
+            if timeout_seconds is not None and (time.time() - capture_start) >= timeout_seconds:
+                selection = SelectionMenu.get_selection(
+                    ['Retry', 'Cancel'],
+                    'No GPIO input detected',
+                    f'No pin was detected within {timeout_seconds:g} seconds.',
+                    parent=CursesMenu.currently_active_menu,
+                )
+                if selection == 0:
+                    hold_start = None
+                    last_bitmask = 0
+                    capture_start = time.time()
+                    self._show_status('Waiting for GPIO input', 'Hold pin(s) to continue')
+                    continue
+                return []
+
+            bitmask = gpionext_core.get_pin_states()
 
             time.sleep(self.POLL_INTERVAL)
 
@@ -242,13 +266,13 @@ class ConfigurationManager:
 
     def wait_for_release(self) -> None:
         """Block until all GPIO pins are released. Prompts after 3 seconds."""
+        if not _HAS_CORE or self._core is None:
+            return
+
         start = time.time()
         prompted = False
         while True:
-            if _HAS_CORE:
-                bitmask = gpionext_core.get_pin_states()
-            else:
-                bitmask = 0
+            bitmask = gpionext_core.get_pin_states()
 
             if bitmask == 0:
                 return
@@ -288,12 +312,18 @@ class ConfigurationManager:
             ):
                 label = f'DPAD {i} {direction}'
                 pins_str = self._capture_pins(label)
+                if pins_str is None:
+                    self._show_message('Joypad configuration', 'Pin capture cancelled; configuration was not saved.', parent=parent)
+                    return
                 entries.append((device_name, f'DPAD {i} {direction}', 'AXIS',
                                 f'(3, {axis_code}, {value})', pins_str))
 
         # Buttons
         for btn_name, btn_code in selected_buttons:
             pins_str = self._capture_pins(btn_name)
+            if pins_str is None:
+                self._show_message('Joypad configuration', 'Pin capture cancelled; configuration was not saved.', parent=parent)
+                return
             entries.append((device_name, btn_name, 'BUTTON', str(btn_code), pins_str))
 
         print(pcolor('green', f'  Saving {device_name} configuration…'))
@@ -317,6 +347,9 @@ class ConfigurationManager:
 
         for key_name, key_code in selected_keys:
             pins_str = self._capture_pins(key_name)
+            if pins_str is None:
+                self._show_message('Keyboard configuration', 'Pin capture cancelled; configuration was not saved.', parent=parent)
+                return
             entries.append((device_name, key_name, 'KEY', str(key_code), pins_str))
 
         print(pcolor('green', '  Saving Keyboard configuration…'))
@@ -361,6 +394,9 @@ class ConfigurationManager:
         if not cmd:
             return
         pins_str = self._capture_pins(f'trigger {name}')
+        if pins_str is None:
+            self._show_message('Add command', 'Pin capture cancelled; command was not added.', parent=parent)
+            return
         SQL.updateEntry({'id': None, 'device': 'Commands', 'name': name,
                          'type': 'COMMAND', 'command': cmd, 'pins': pins_str})
         self._show_message('Add command', 'Command added.', parent=parent)
@@ -378,6 +414,9 @@ class ConfigurationManager:
         pins_str = row['pins']
         if self._confirm('Edit command', 'Re-assign pin?', parent=parent):
             pins_str = self._capture_pins('new command pin(s)')
+            if pins_str is None:
+                self._show_message('Edit command', 'Pin capture cancelled; command was not updated.', parent=parent)
+                return
         SQL.updateEntry({'id': row['id'], 'device': 'Commands', 'name': name,
                          'type': 'COMMAND', 'command': cmd, 'pins': pins_str})
         self._show_message('Edit command', 'Command updated.', parent=parent)
@@ -413,6 +452,9 @@ class ConfigurationManager:
                 continue
             elif action == 0:
                 pins_str = self._capture_pins(row['name'])
+                if pins_str is None:
+                    self._show_message('Edit Existing Mappings', 'Pin capture cancelled; mapping was not updated.', parent=parent)
+                    continue
                 row['pins'] = pins_str
                 SQL.updateEntry(row)
                 self._show_message('Edit Existing Mappings', 'Mapping updated.', parent=parent)
@@ -718,10 +760,12 @@ class ConfigurationManager:
             screen.addstr(row, 2, line[: max_cols - 4])
         screen.refresh()
 
-    def _capture_pins(self, label: str) -> str:
+    def _capture_pins(self, label: str) -> str | None:
         """Prompt for a GPIO hold, wait for capture/release, and return DB pin text."""
         self._show_status('Waiting for GPIO input', f'Hold pin(s) for {label}')
         pins = self.wait_for_pin()
+        if not pins:
+            return None
         pins_str = self._pins_to_str(pins)
         self._show_status('Pin captured', f'{label}: {pins_str}\nRelease all buttons to continue')
         self.wait_for_release()
