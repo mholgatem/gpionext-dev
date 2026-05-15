@@ -251,7 +251,15 @@ class ConfigurationManager:
                     continue
                 return []
 
-            bitmask = gpionext_core.get_pin_states()
+            try:
+                bitmask = gpionext_core.get_pin_states()
+            except Exception as exc:
+                self._show_message(
+                    'GPIO capture error',
+                    f'GPIO pin capture failed:\n{exc}\n\nConfiguration was not saved.',
+                    parent=CursesMenu.currently_active_menu,
+                )
+                return []
 
             time.sleep(self.POLL_INTERVAL)
 
@@ -278,7 +286,15 @@ class ConfigurationManager:
         start = time.time()
         prompted = False
         while True:
-            bitmask = gpionext_core.get_pin_states()
+            try:
+                bitmask = gpionext_core.get_pin_states()
+            except Exception as exc:
+                self._show_message(
+                    'GPIO release error',
+                    f'GPIO release check failed:\n{exc}',
+                    parent=CursesMenu.currently_active_menu,
+                )
+                return
 
             if bitmask == 0:
                 return
@@ -765,9 +781,12 @@ class ConfigurationManager:
 
             if active_menu and active_menu.screen:
                 try:
-                    max_y, max_x = screen.getmaxyx()
-                    active_menu.screen.erase()
-                    active_menu.screen.refresh(0, 0, 0, 0, max_y - 1, max_x - 1)
+                    # Full-screen views may redefine global curses color pairs.
+                    # Reinitialize the menu pairs before the next redraw so the
+                    # parent menu does not inherit monitor colors (for example,
+                    # green normal text after returning from Live Pin Monitor).
+                    active_menu._set_up_colors()
+                    active_menu.draw()
                 except curses.error:
                     pass
 
@@ -837,15 +856,21 @@ class ConfigurationManager:
             return
 
         screen = CursesMenu.stdscr
-        max_rows, max_cols = screen.getmaxyx()
-        screen.erase()
-        screen.addstr(1, 2, title[: max_cols - 4], curses.A_STANDOUT)
-        for index, line in enumerate(message.splitlines() or [""]):
-            row = 3 + index
-            if row >= max_rows - 1:
-                break
-            screen.addstr(row, 2, line[: max_cols - 4])
-        screen.refresh()
+        try:
+            max_rows, max_cols = screen.getmaxyx()
+            usable_cols = max(1, max_cols - 4)
+            screen.erase()
+            screen.addstr(1, 2, title[:usable_cols], curses.A_STANDOUT)
+            for index, line in enumerate(message.splitlines() or [""]):
+                row = 3 + index
+                if row >= max_rows - 1:
+                    break
+                screen.addstr(row, 2, line[:usable_cols])
+            screen.refresh()
+        except curses.error:
+            # Avoid letting transient status rendering failures close the
+            # configuration flow before the user can see a persistent message.
+            pass
 
     def _capture_pins(self, label: str) -> str | None:
         """Prompt for a GPIO hold, wait for capture/release, and return DB pin text."""

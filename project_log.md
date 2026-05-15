@@ -1,7 +1,7 @@
 # Project Log
 
 ## Status
-Active — Remaining config-manager yes/no/action prompts have been normalized into curses menu selections, while free-form input is limited to required text/path/I2C value entry.
+Active — Pin-capture errors are surfaced as persistent curses messages, transient status drawing is guarded, and the live pin monitor now restores menu color pairs before returning.
 
 ## Last Updated
 2026-05-15
@@ -38,6 +38,9 @@ Active — Remaining config-manager yes/no/action prompts have been normalized i
 - [x] Replaced daemon restart, command pin reassignment, delete/overwrite/import confirmations, and existing-mapping action prompts with explicit `SelectionMenu` option menus.
 - [x] Extended `_confirm()` to support custom two-option labels while preserving its existing default/no ordering behavior.
 - [x] Replaced free-form MCP23017 interrupt-pin entry with a menu choice plus GPIO capture so only command/path/I2C bus/address fields remain raw text inputs.
+- [x] Added persistent GPIO capture/release error dialogs so exceptions while waiting for pin input are visible before configuration aborts.
+- [x] Guarded transient pin-capture status rendering against curses drawing failures on constrained terminals.
+- [x] Restored parent menu curses color pairs after returning from the live pin monitor so main-menu text does not inherit green monitor colors.
 
 ## Known Issues & Lessons Learned
 - Nested curses selection menus should receive the immediate active submenu as `parent`; passing the grandparent can break return/redraw behavior when exiting child menus.
@@ -54,3 +57,6 @@ Active — Remaining config-manager yes/no/action prompts have been normalized i
 - GPIO capture callers must treat an empty `wait_for_pin()` result as cancellation/unavailability and skip database writes to avoid saving empty or invalid pin mappings.
 - Full-screen tools launched from the curses menu should reuse `CursesMenu.stdscr` via `LivePinView.run_in_window()`/`_run_fullscreen_curses()`; starting a nested `curses.wrapper()` before returning to an existing menu can corrupt terminal/menu state.
 - Full-screen curses callbacks that set nonblocking input must restore blocking timeout/keypad state and explicitly clear/refresh the parent screen before handing control back to `cursesmenu`.
+- Full-screen curses tools can redefine shared color-pair IDs; callers must reset parent menu color pairs before redrawing or normal menu text can inherit tool-specific colors.
+- GPIO core polling can raise runtime exceptions after the capture prompt is displayed; catch those exceptions at the polling boundary and show an acknowledgement dialog instead of allowing a traceback to flash and disappear.
+- Transient curses status screens should tolerate `curses.error` because narrow/small terminals can otherwise abort an input-capture workflow before a persistent error message is shown.
