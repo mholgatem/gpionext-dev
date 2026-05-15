@@ -190,7 +190,7 @@ class ConfigurationManager:
         menu.append_item(FunctionItem("Edit existing mapping", self._edit_existing, [menu]))
         menu.append_item(FunctionItem("Clear a device", self._clear_device, [menu]))
         
-        menu.append_item(FunctionItem("Live pin monitor", self._show_live_pins))
+        menu.append_item(FunctionItem("Live pin monitor", self._show_live_pins, [menu]))
         menu.append_item(FunctionItem("Hardware settings", self._show_hardware_settings, [menu]))
         menu.append_item(FunctionItem("Load HAT preset", self._load_preset, [menu]))
         menu.append_item(FunctionItem("Export config (JSON)", self._export_config))
@@ -585,7 +585,7 @@ class ConfigurationManager:
     # Live pin monitor
     # ---------------------------------------------------------------------------
 
-    def _show_live_pins(self) -> None:
+    def _show_live_pins(self, parent: CursesMenu = None) -> None:
         """Launch the full-screen live pin monitor. Includes I2C pins if configured."""
         from ui.live_pin_view import LivePinView
         db_rows = SQL.getAllRows()
@@ -608,7 +608,7 @@ class ConfigurationManager:
                 pins_to_show.extend(range(base_vpin, base_vpin + 4))
 
         with LivePinView(pins_to_show, db_rows) as view:
-            view.run()
+            self._run_fullscreen_curses(view.run_in_window, parent=parent)
 
     # ---------------------------------------------------------------------------
     # HAT preset loader
@@ -685,6 +685,36 @@ class ConfigurationManager:
     # ---------------------------------------------------------------------------
     # Selection helpers
     # ---------------------------------------------------------------------------
+
+
+    def _run_fullscreen_curses(self, callback, parent: CursesMenu = None) -> None:
+        """Run a fullscreen curses callback inside the menu's existing terminal lifecycle."""
+        active_menu = parent or CursesMenu.currently_active_menu
+        screen = CursesMenu.stdscr
+
+        if screen is None:
+            return
+
+        try:
+            curses.reset_prog_mode()
+            callback(screen)
+        finally:
+            try:
+                screen.nodelay(False)
+                screen.timeout(-1)
+                screen.keypad(True)
+                screen.erase()
+                screen.refresh()
+            except curses.error:
+                pass
+
+            if active_menu and active_menu.screen:
+                try:
+                    max_y, max_x = screen.getmaxyx()
+                    active_menu.screen.erase()
+                    active_menu.screen.refresh(0, 0, 0, 0, max_y - 1, max_x - 1)
+                except curses.error:
+                    pass
 
     def _show_message(
         self,

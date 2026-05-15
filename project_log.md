@@ -1,7 +1,7 @@
 # Project Log
 
 ## Status
-Active — GPIO capture in the configuration UI now fails safely when the monitor is unavailable, supports timeout retry/cancel, and aborts in-progress mapping workflows without saving partial pin data.
+Active — The live pin monitor now reuses the configuration menu's existing curses screen/lifecycle so the parent menu can resume cleanly without nested curses.wrapper() calls.
 
 ## Last Updated
 2026-05-15
@@ -33,6 +33,8 @@ Active — GPIO capture in the configuration UI now fails safely when the monito
 - [x] Added monitor availability checks to `wait_for_pin()` and `wait_for_release()` so GPIO polling is skipped when `_HAS_CORE` is false or no core instance is active.
 - [x] Added a 30-second default GPIO capture timeout with retry/cancel handling in `wait_for_pin()`.
 - [x] Updated joypad, keyboard, command, and existing-mapping edit workflows to abort without saving when pin capture returns no pins.
+- [x] Updated the live pin monitor to expose `LivePinView.run_in_window(stdscr)` for drawing into an existing curses screen while keeping `run()` as the standalone/manual `curses.wrapper()` entry point.
+- [x] Routed the configuration menu's live pin monitor through a shared fullscreen curses helper that restores blocking input state, clears/refreshes the parent screen, and avoids nested wrappers when returning to the menu.
 
 ## Known Issues & Lessons Learned
 - Nested curses selection menus should receive the immediate active submenu as `parent`; passing the grandparent can break return/redraw behavior when exiting child menus.
@@ -46,3 +48,5 @@ Active — GPIO capture in the configuration UI now fails safely when the monito
 - `MultiSelect.get_selection()` returns selected item labels for successful selections, but may return sentinel cancellation values (`None`, `[]`, or `[-1]`); normalize those sentinels before converting labels to a comparison set.
 - Stored DB `pins` values may be plain integers, tuple/list strings, quoted numeric strings, or virtual I2C identifiers; future parsing should use `SQL.parse_pins_value()`/`SQL.pin_value_to_vpin()` rather than `eval()`.
 - GPIO capture callers must treat an empty `wait_for_pin()` result as cancellation/unavailability and skip database writes to avoid saving empty or invalid pin mappings.
+- Full-screen tools launched from the curses menu should reuse `CursesMenu.stdscr` via `LivePinView.run_in_window()`/`_run_fullscreen_curses()`; starting a nested `curses.wrapper()` before returning to an existing menu can corrupt terminal/menu state.
+- Full-screen curses callbacks that set nonblocking input must restore blocking timeout/keypad state and explicitly clear/refresh the parent screen before handing control back to `cursesmenu`.
