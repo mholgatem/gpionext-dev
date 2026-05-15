@@ -1,7 +1,7 @@
 # Project Log
 
 ## Status
-Active — UI configuration manager cleanup in progress.
+Active — nested curses menu parent handling updated.
 
 ## Last Updated
 2026-05-15
@@ -19,8 +19,10 @@ Active — UI configuration manager cleanup in progress.
 - [x] Centralized action selection in `ConfigurationManager._choose_action()`.
 - [x] Centralized free-text prompting in `ConfigurationManager._text_input()` so curses mode is suspended/restored in one location.
 - [x] Centralized GPIO pin-capture status display in curses-compatible helpers instead of inline pin-capture `print()` calls.
+- [x] Updated nested `config_manager.py` menu callbacks to pass the immediate active submenu as the parent when launching child selection menus.
 
 ## Known Issues & Lessons Learned
+- Nested curses selection menus should receive the immediate active submenu as `parent`; passing the grandparent can break return/redraw behavior when exiting child menus.
 - `python -m py_compile` creates `__pycache__` files; remove those generated artifacts before committing.
 - The repository currently has an untracked `core/Cargo.lock` that was not created by this task and should not be committed unless intentionally requested.
 - Direct terminal `input()` calls conflict with curses menu rendering; future text prompts should use `_text_input()` rather than adding new raw prompts.

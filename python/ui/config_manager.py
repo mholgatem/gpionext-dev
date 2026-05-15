@@ -336,7 +336,7 @@ class ConfigurationManager:
             
             menu.append_item(FunctionItem("Add new command", self._add_command, should_exit=True))
             if rows:
-                menu.append_item(FunctionItem("Delete a command", self._delete_command_menu, [parent], should_exit=True))
+                menu.append_item(FunctionItem("Delete a command", self._delete_command_menu, [menu], should_exit=True))
             
             menu.show(parent=parent)
             if menu.selected_option == -1 or menu.selected_item == menu.exit_item:
@@ -442,9 +442,9 @@ class ConfigurationManager:
                 menu.subtitle = "I2C is DISABLED (use 'gpionext set use_i2c true')"
 
             menu.append_item(FunctionItem(f"I2C Baudrate (Current: {baudrate.get_current_baudrate()} Hz)", 
-                                         self._configure_baudrate, [parent], should_exit=True))
-            menu.append_item(FunctionItem("Manage MCP23017 chips", self._manage_mcp23017, [parent], should_exit=True))
-            menu.append_item(FunctionItem("Manage ADS1115 chips", self._manage_ads1115, [parent], should_exit=True))
+                                         self._configure_baudrate, [menu], should_exit=True))
+            menu.append_item(FunctionItem("Manage MCP23017 chips", self._manage_mcp23017, [menu], should_exit=True))
+            menu.append_item(FunctionItem("Manage ADS1115 chips", self._manage_ads1115, [menu], should_exit=True))
             
             menu.show(parent=parent)
             if menu.selected_option == -1 or menu.selected_item == menu.exit_item:
@@ -472,7 +472,7 @@ class ConfigurationManager:
 
             menu.append_item(FunctionItem("Add new chip", self._add_mcp23017, should_exit=True))
             if rows:
-                menu.append_item(FunctionItem("Delete a chip", self._delete_mcp23017_menu, [parent], should_exit=True))
+                menu.append_item(FunctionItem("Delete a chip", self._delete_mcp23017_menu, [menu], should_exit=True))
             
             menu.show(parent=parent)
             if menu.selected_option == -1 or menu.selected_item == menu.exit_item:
@@ -511,7 +511,7 @@ class ConfigurationManager:
 
             menu.append_item(FunctionItem("Add new chip", self._add_ads1115, should_exit=True))
             if rows:
-                menu.append_item(FunctionItem("Delete a chip", self._delete_ads1115_menu, [parent], should_exit=True))
+                menu.append_item(FunctionItem("Delete a chip", self._delete_ads1115_menu, [menu], should_exit=True))
             
             menu.show(parent=parent)
             if menu.selected_option == -1 or menu.selected_item == menu.exit_item:
