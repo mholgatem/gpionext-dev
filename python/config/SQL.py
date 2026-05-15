@@ -14,6 +14,7 @@ Schema (unchanged from reference):
 All functions preserve the same signatures as the reference SQL.py so existing
 callers (config_manager.py, gpionext.py) work without changes.
 """
+import ast
 import os
 import sqlite3
 
@@ -33,6 +34,121 @@ def _row_factory(cursor: sqlite3.Cursor, row: tuple) -> dict:
     """Convert a sqlite3 row tuple to a dict keyed by column name."""
     return {col[0]: row[i] for i, col in enumerate(cursor.description)}
 
+
+# ---------------------------------------------------------------------------
+# Pin value parsing / conversion helpers
+# ---------------------------------------------------------------------------
+
+def parse_pins_value(raw: str) -> list[int | str]:
+    """
+    Safely parse a stored DB pins value into physical BOARD pins and/or
+    virtual I2C pin strings.
+
+    Supported stored formats include:
+      - "7"
+      - "(7, 11)" or "[7, 11]"
+      - "('7', '11')"
+      - "i2c-0x20-A0" or "i2c-0x48-ch0"
+
+    Tuple/list-style values are parsed with ast.literal_eval. eval() must not
+    be used for DB pin parsing.
+    """
+    if raw is None:
+        return []
+
+    text = str(raw).strip()
+    if not text:
+        return []
+
+    if _is_i2c_pin_string(text):
+        return [text]
+
+    try:
+        return [int(text)]
+    except ValueError:
+        pass
+
+    if text[0] not in '([':
+        return []
+
+    try:
+        parsed = ast.literal_eval(text)
+    except (SyntaxError, ValueError):
+        return []
+
+    if not isinstance(parsed, (list, tuple)):
+        return []
+
+    pins: list[int | str] = []
+    for item in parsed:
+        pin = _normalise_pin_item(item)
+        if pin is not None:
+            pins.append(pin)
+    return pins
+
+
+def pin_value_to_vpin(pin: int | str) -> int | None:
+    """
+    Convert a parsed physical or virtual pin value to the integer pin number
+    expected by the core/runtime display layers.
+    """
+    if isinstance(pin, int):
+        return pin
+    if isinstance(pin, str):
+        text = pin.strip()
+        if _is_i2c_pin_string(text):
+            try:
+                return _map_i2c_pin_string_to_vpin(text)
+            except (IndexError, ValueError):
+                return None
+        try:
+            return int(text)
+        except ValueError:
+            return None
+    return None
+
+
+def format_pins_value(raw: str) -> str:
+    """
+    Format a stored pins value consistently for menus and status labels.
+    Falls back to the original raw value if it cannot be parsed.
+    """
+    pins = parse_pins_value(raw)
+    if pins:
+        return ', '.join(str(pin) for pin in pins)
+    return '' if raw is None else str(raw)
+
+
+def _normalise_pin_item(item: object) -> int | str | None:
+    """Return a supported pin item or None for unsupported values."""
+    if isinstance(item, int):
+        return item
+    if isinstance(item, str):
+        text = item.strip()
+        if _is_i2c_pin_string(text):
+            return text
+        try:
+            return int(text)
+        except ValueError:
+            return None
+    return None
+
+
+def _is_i2c_pin_string(value: str) -> bool:
+    """Return True for supported virtual I2C pin identifiers."""
+    parts = value.split('-')
+    if len(parts) != 3 or parts[0] != 'i2c':
+        return False
+    if not parts[1].lower().startswith('0x'):
+        return False
+    try:
+        int(parts[1], 16)
+    except ValueError:
+        return False
+    pin = parts[2]
+    if pin.startswith('ch'):
+        return pin[2:].isdigit()
+    return len(pin) >= 2 and pin[0] in ('A', 'B') and pin[1:].isdigit()
 
 # ---------------------------------------------------------------------------
 # Initialisation
@@ -291,27 +407,13 @@ def buildConfigDict(args) -> dict:
         device_name = row['device']
         device_index = DEVICE_INDEX.get(device_name, 5)
 
-        # pins stored as '11' (single) or '(11, 13)' (combo/tuple)
-        raw_pins = row['pins']
-        try:
-            # Handle potential i2c pin strings like "i2c-0x20-A0"
-            if isinstance(raw_pins, str) and raw_pins.startswith('i2c-'):
-                pins = [_map_i2c_pin_string_to_vpin(raw_pins)]
-            else:
-                pins_val = eval(raw_pins)
-                if isinstance(pins_val, int):
-                    pins = [pins_val]
-                elif isinstance(pins_val, tuple):
-                    pins = []
-                    for p in pins_val:
-                        if isinstance(p, str) and p.startswith('i2c-'):
-                            pins.append(_map_i2c_pin_string_to_vpin(p))
-                        else:
-                            pins.append(int(p))
-                else:
-                    pins = list(pins_val)
-        except Exception:
-            pins = []
+        # pins stored as '11' (single), '(11, 13)' (combo/tuple),
+        # or virtual I2C identifiers such as 'i2c-0x20-A0'.
+        pins = []
+        for parsed_pin in parse_pins_value(row['pins']):
+            vpin = pin_value_to_vpin(parsed_pin)
+            if vpin is not None:
+                pins.append(vpin)
 
         peripherals.append({
             'name':         row['name'],
