@@ -121,13 +121,10 @@ static GLOBAL_BITMASK: [AtomicU64; 3] = [
     AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)
 ];
 
-/// Per-device combo generation counter. Incremented each time a new press
-/// event starts a fresh combo window for that device. Rayon tasks capture
+/// Global combo generation counter. Incremented each time a new press
+/// event starts a fresh global combo window. Rayon tasks capture
 /// the generation at spawn time and self-cancel if it has advanced.
-static COMBO_GENS: [AtomicU64; 6] = [
-    AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-    AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-];
+static GLOBAL_COMBO_GEN: AtomicU64 = AtomicU64::new(0);
 
 /// Active configuration, set by `GpioCore::start()` and replaced on
 /// `GpioCore::reload()`. `None` before daemon start.
@@ -228,16 +225,16 @@ pub fn clear_pin(board_pin: u8) {
 // Combo resolution — called by gpio.rs after set_pin()
 // ---------------------------------------------------------------------------
 
-/// Schedule a combo resolution task for every device that has a peripheral
-/// whose `pin_mask` includes `board_pin`.
+/// Schedule a global combo resolution task.
 ///
-/// A generation counter acts as a cancellation token: if another press event
+/// A global generation counter acts as a cancellation token: if ANY press event
 /// arrives during the combo window, the old generation is stale and its task
-/// exits without dispatching.
+/// exits without dispatching. This ensures the longest matching combo across
+/// ALL pins is resolved.
 ///
 /// # Parameters
-/// - `board_pin`: the pin that just fired (used to look up affected devices)
-pub fn on_pin_press(board_pin: u8) {
+/// - `board_pin`: the pin that just fired
+pub fn on_pin_press(_board_pin: u8) {
     let config_lock = match CONFIG.get() {
         Some(l) => l,
         None => return,
@@ -249,46 +246,31 @@ pub fn on_pin_press(board_pin: u8) {
 
     let combo_delay = config.combo_delay_ms;
 
-    // Determine which device indices are affected by this pin
-    let affected_devices: Vec<usize> = config
-        .pin_map
-        .get(&board_pin)
-        .map(|pvec| {
-            pvec.iter()
-                .map(|p| p.device_index)
-                .collect::<std::collections::HashSet<_>>()
-                .into_iter()
-                .collect()
-        })
-        .unwrap_or_default();
-
     let pool = match POOL.get() {
         Some(p) => p.clone(),
         None => return,
     };
 
-    for device_index in affected_devices {
-        // Bump generation; capture new value for this task
-        let gen = COMBO_GENS[device_index].fetch_add(1, Ordering::SeqCst) + 1;
-        let cfg = config.clone();
+    // Bump global generation; capture new value for this task
+    let gen = GLOBAL_COMBO_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    let cfg = config.clone();
 
-        pool.spawn(move || {
-            // Wait out the combo window
-            std::thread::sleep(Duration::from_millis(combo_delay));
+    pool.spawn(move || {
+        // Wait out the combo window
+        std::thread::sleep(Duration::from_millis(combo_delay));
 
-            // Bail out if a newer press superseded this window
-            if COMBO_GENS[device_index].load(Ordering::SeqCst) != gen {
-                return;
-            }
+        // Bail out if a newer press (on any pin) superseded this window
+        if GLOBAL_COMBO_GEN.load(Ordering::SeqCst) != gen {
+            return;
+        }
 
-            let bitmask = [
-                GLOBAL_BITMASK[0].load(Ordering::SeqCst),
-                GLOBAL_BITMASK[1].load(Ordering::SeqCst),
-                GLOBAL_BITMASK[2].load(Ordering::SeqCst),
-            ];
-            resolve_and_dispatch(&cfg, device_index, bitmask);
-        });
-    }
+        let bitmask = [
+            GLOBAL_BITMASK[0].load(Ordering::SeqCst),
+            GLOBAL_BITMASK[1].load(Ordering::SeqCst),
+            GLOBAL_BITMASK[2].load(Ordering::SeqCst),
+        ];
+        resolve_and_dispatch_global(&cfg, bitmask);
+    });
 }
 
 /// Handle a pin release: clear the bitmask and trigger release on any
@@ -322,24 +304,49 @@ pub fn on_pin_release(board_pin: u8) {
 // Combo matching — runs inside the Rayon task after combo_delay
 // ---------------------------------------------------------------------------
 
-/// Find the longest-matching peripheral for `device_index` in `bitmask` and
-/// dispatch a press event. "Longest" = most pins in `pin_mask` (combos win
-/// over single-pin mappings when both match).
+/// Resolve and dispatch peripherals globally based on the longest-match rule.
 ///
-/// Iterating `device_peripherals[device_index]` in longest-first order
-/// (guaranteed by `Config` construction) means the first `bitmask_in` match
-/// is the correct one.
-///
-/// # Parameters
-/// - `config`       : current configuration snapshot
-/// - `device_index` : which device's peripherals to scan (0-5)
-/// - `bitmask`      : current GLOBAL_BITMASK snapshot
-fn resolve_and_dispatch(config: &Arc<Config>, device_index: usize, bitmask: [u64; 3]) {
-    for peripheral in &config.device_peripherals[device_index] {
+/// 1. Finds the maximum `pin_count` among all peripherals matching the `bitmask`.
+/// 2. Collects all matching peripherals sharing that maximum `pin_count`.
+/// 3. Dispatches them, prioritizing Commands before HID inputs.
+fn resolve_and_dispatch_global(config: &Arc<Config>, bitmask: [u64; 3]) {
+    let mut max_pin_count = 0;
+    let mut matching_peripherals = Vec::new();
+
+    // Peripherals are already sorted longest-first in config.peripherals
+    for peripheral in &config.peripherals {
         if peripheral.bitmask_in(bitmask) {
-            crate::uinput::dispatch_press(peripheral, config.key_hold_delay_ms);
-            return;
+            if max_pin_count == 0 {
+                max_pin_count = peripheral.pin_count;
+            }
+
+            if peripheral.pin_count == max_pin_count {
+                matching_peripherals.push(peripheral);
+            } else {
+                // Since they are sorted by pin_count descending,
+                // any subsequent matches will have a smaller pin_count.
+                break;
+            }
         }
+    }
+
+    if matching_peripherals.is_empty() {
+        return;
+    }
+
+    // Sort to ensure Commands execute first
+    // EventType::Command should come before others
+    matching_peripherals.sort_by(|a, b| {
+        let a_is_cmd = matches!(a.event_type, EventType::Command { .. });
+        let b_is_cmd = matches!(b.event_type, EventType::Command { .. });
+        b_is_cmd.cmp(&a_is_cmd) // true (1) < false (0) is wrong, we want true first
+    });
+    // Wait, b_is_cmd.cmp(&a_is_cmd) where true > false:
+    // If a is cmd (T) and b is not (F): b.cmp(a) => F.cmp(T) => Less
+    // So a comes first. Correct.
+
+    for peripheral in matching_peripherals {
+        crate::uinput::dispatch_press(peripheral, config.key_hold_delay_ms);
     }
 }
 

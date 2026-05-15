@@ -17,22 +17,23 @@ class MultiSelect(CursesMenu):
 			self.append_item(SelectionItem(item, index, self))
 
 	@classmethod
-	def get_selection(cls, strings, title="Select an option", subtitle=None, exit_option=True, _menu=None):
+	def get_selection(cls, strings, title="Select an option", subtitle=None, exit_option=True, _menu=None, parent=None):
 		"""
 		Single-method way of getting a selection out of a list of strings
 		:param list[str] strings: the list of string used to build the menu
 		:param list _menu: should probably only be used for testing, pass in a list and the created menu used \
 		internally by the method will be appended to it
+		:param CursesMenu parent: the parent menu
 		"""
 		menu = cls(strings, title, subtitle, exit_option)
 		for item in menu.items:
-			item.checked = False
-			item.defaultText = item.text
-			if item.defaultText != '← Return to Main Menu':
+			if isinstance(item, SelectionItem):
+				item.checked = False
+				item.defaultText = item.text
 				item.text = '[ ] ' + item.defaultText
 		if _menu is not None:
 			_menu.append(menu)
-		menu.show()
+		menu.show(parent=parent)
 		menu.join()
 		return menu.selected_option
 	
@@ -40,11 +41,13 @@ class MultiSelect(CursesMenu):
 		"""
 		Redraws the menu and refreshes the screen. Should be called whenever something changes that needs to be redrawn.
 		"""
-
+		if CursesMenu.stdscr is not None:
+			CursesMenu.stdscr.erase()
 		self.screen.border(0)
 		if self.title is not None:
 			self.screen.addstr(1, 2, self.title, curses.A_STANDOUT)
-			buttonCount = "{0} Buttons Selected".format(len([ x.defaultText for x in self.items if x.checked ]))
+			checked_items = [x for x in self.items if isinstance(x, SelectionItem) and getattr(x, 'checked', False)]
+			buttonCount = "{0} Items Selected".format(len(checked_items))
 			self.screen.addstr(1, len(self.title) + 4, "-", curses.A_BOLD)
 			self.screen.addstr(1, len(self.title) + 7, buttonCount, curses.A_STANDOUT)
 		if self.subtitle is not None:
@@ -76,10 +79,13 @@ class MultiSelect(CursesMenu):
 		Select multiple items
 		"""
 		
-		if self.items[ self.current_option ].defaultText == '← Return to Main Menu':
-			self.selected_option = [-1]
+		current_item = self.items[self.current_option]
+		if isinstance(current_item, SelectionItem):
+			self.selected_option = [x.defaultText for x in self.items if isinstance(x, SelectionItem) and getattr(x, 'checked', False)]
 		else:
-			self.selected_option = [ x.defaultText for x in self.items if x.checked ]
+			# Likely the exit item
+			self.selected_option = [-1]
+
 		self.selected_item.set_up()
 		self.selected_item.action()
 		self.selected_item.clean_up()
@@ -104,11 +110,10 @@ class MultiSelect(CursesMenu):
 		elif user_input == curses.KEY_UP:
 			self.go_up()
 		elif user_input == ord(" "):
-			if self.items[ self.current_option] .defaultText != '← Return to Main Menu':
-				item = self.items[self.current_option]
-				item.checked = not item.checked
+			item = self.items[self.current_option]
+			if isinstance(item, SelectionItem):
+				item.checked = not getattr(item, 'checked', False)
 				item.text = ('[X] ' if item.checked else '[ ] ') + item.defaultText
-				self.items[self.current_option] = item
 				self.draw()
 		elif user_input in {curses.KEY_ENTER, 10, 13}:
 			self.select_many()

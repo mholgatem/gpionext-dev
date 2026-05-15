@@ -132,13 +132,15 @@ class CursesMenu(object):
 		if self.parent is None:
 			curses.wrapper(self._main_loop)
 		else:
+			curses.reset_prog_mode()
 			self._main_loop(None)
 		CursesMenu.currently_active_menu = None
 		self.clear_screen()
-		clear_terminal()
+		if self.parent is None:
+			clear_terminal()
 		CursesMenu.currently_active_menu = self.previous_active_menu
 
-	def start(self, show_exit_option=None):
+	def start(self, show_exit_option=None, parent=None):
 		"""
 		Start the menu in a new thread and allow the user to interact with it.
 		The thread is a daemon, so :meth:`join()<cursesmenu.CursesMenu.join>` should be called if there's a possibility\
@@ -146,10 +148,14 @@ class CursesMenu(object):
 
 		:param bool show_exit_option: Whether the exit item should be shown, defaults to\
 		the value set in the constructor
+		:param CursesMenu parent: The parent menu to link to
 		"""
 
 		self.previous_active_menu = CursesMenu.currently_active_menu
 		CursesMenu.currently_active_menu = None
+
+		if parent:
+			self.parent = parent
 
 		self.should_exit = False
 
@@ -169,20 +175,46 @@ class CursesMenu(object):
 
 		self._main_thread.start()
 
-	def show(self, show_exit_option=None):
+	def show(self, show_exit_option=None, parent=None):
 		"""
-		Calls start and then immediately joins.
+		Calls start and then immediately joins, or runs directly if parent is provided.
 
 		:param bool show_exit_option: Whether the exit item should be shown, defaults to the value set \
 		in the constructor
+		:param CursesMenu parent: The parent menu to link to
 		"""
-		self.start(show_exit_option)
-		self.join()
+		if parent:
+			self.parent = parent
+			self.previous_active_menu = CursesMenu.currently_active_menu
+			CursesMenu.currently_active_menu = None
+			self.should_exit = False
+
+			if show_exit_option is None:
+				show_exit_option = self.show_exit_option
+
+			if show_exit_option:
+				self.add_exit()
+			else:
+				self.remove_exit()
+
+			curses.reset_prog_mode()
+			self._main_loop(None)
+			
+			self.clear_screen()
+			CursesMenu.currently_active_menu = self.previous_active_menu
+		else:
+			self.start(show_exit_option)
+			self.join()
 
 	def _main_loop(self, scr):
 		if scr is not None:
 			CursesMenu.stdscr = scr
 			
+		if CursesMenu.stdscr is not None:
+			CursesMenu.stdscr.keypad(True)
+			curses.cbreak()
+			curses.noecho()
+
 		height = 7
 		screen_rows, screen_cols = CursesMenu.stdscr.getmaxyx()
 		for index, item in enumerate( self.items ):
@@ -214,7 +246,8 @@ class CursesMenu(object):
 		"""
 		Redraws the menu and refreshes the screen. Should be called whenever something changes that needs to be redrawn.
 		"""
-
+		if CursesMenu.stdscr is not None:
+			CursesMenu.stdscr.erase()
 		self.screen.border(0)
 		if self.title is not None:
 			self.screen.addstr(2, 2, self.title, curses.A_STANDOUT)
@@ -292,7 +325,8 @@ class CursesMenu(object):
 		Should be called at some point after :meth:`start()<cursesmenu.CursesMenu.start>` to block until the menu exits.
 		:param Number timeout: How long to wait before timing out
 		"""
-		self._main_thread.join(timeout=timeout)
+		if self._main_thread:
+			self._main_thread.join(timeout=timeout)
 
 	def get_input(self):
 		"""
@@ -376,8 +410,9 @@ class CursesMenu(object):
 
 	def _set_up_colors(self):
 		curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_WHITE)
+		curses.init_pair(2, curses.COLOR_WHITE, curses.COLOR_BLACK)
 		self.highlight = curses.color_pair(1)
-		self.normal = curses.A_NORMAL
+		self.normal = curses.color_pair(2)
 
 	def clear_screen(self):
 		"""
@@ -471,9 +506,9 @@ class ExitItem(MenuItem):
 
 def clear_terminal():
 	"""
-	Call the platform specific function to clear the terminal: cls on windows, reset otherwise
+	Call the platform specific function to clear the terminal: cls on windows, clear otherwise
 	"""
 	if platform.system().lower() == "windows":
 		os.system('cls')
 	else:
-		os.system('reset')
+		os.system('clear')

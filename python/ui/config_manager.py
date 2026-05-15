@@ -31,6 +31,11 @@ _PYTHON_DIR = os.path.dirname(_UI_DIR)
 _INSTALL_ROOT = os.path.dirname(_PYTHON_DIR)
 sys.path.insert(0, _PYTHON_DIR)
 sys.path.insert(0, _INSTALL_ROOT)
+sys.path.insert(0, os.path.join(_UI_DIR, 'cursesmenu'))
+
+import cursesmenu
+from cursesmenu import CursesMenu, SelectionMenu, MultiSelect
+from cursesmenu.items import FunctionItem, SubmenuItem, MenuItem
 
 import config.SQL as SQL
 from config.constants import AVAILABLE_PINS, AVAILABLE_PINS_STRING, DEVICE_LIST, BUTTON_LIST, KEY_LIST
@@ -72,18 +77,18 @@ def pcolor(color: str, text: str) -> str:
 
 parser = argparse.ArgumentParser(description='GPIOnext Configuration Manager')
 parser.add_argument('--combo_delay', metavar='50', default=50, type=int,
-                    help='Combo window in milliseconds')
+                    help='Combo window in milliseconds (inherited from daemon)')
 parser.add_argument('--key_hold_delay', metavar='350', default=350, type=int,
-                    help='Key repeat delay in milliseconds')
+                    help='Key repeat delay in milliseconds (inherited from daemon)')
 parser.add_argument('--pins', metavar='3,5,7,11', type=str,
                     default=AVAILABLE_PINS_STRING,
-                    help='Comma-delimited BOARD pin numbers to watch')
+                    help='Comma-delimited BOARD pin numbers to watch (inherited from daemon)')
 parser.add_argument('--debounce', metavar='1', default=1, type=int,
-                    help='Debounce time in milliseconds')
+                    help='Debounce time in milliseconds (inherited from daemon)')
 parser.add_argument('--pulldown', dest='pulldown', default=False, action='store_true',
-                    help='Use pulldown resistors instead of pullup')
+                    help='Use pulldown resistors instead of pullup (inherited from daemon)')
 parser.add_argument('--use_i2c', dest='use_i2c', default=False, action='store_true',
-                    help='Enable I2C hardware (MCP23017/ADS1115). Disables GPIO on pins 3 and 5.')
+                    help='Enable I2C hardware (MCP23017/ADS1115). (inherited from daemon)')
 parser.add_argument('--dev', dest='dev', default=False, action='store_true')
 parser.add_argument('--debug', dest='debug', default=False, action='store_true')
 
@@ -172,87 +177,28 @@ class ConfigurationManager:
     # ---------------------------------------------------------------------------
 
     def _main_loop(self) -> None:
-        """Present the top-level menu repeatedly until the user exits."""
-        while True:
-            choice = self._show_main_menu()
+        """Present the top-level menu using cursesmenu."""
+        menu = CursesMenu("GPIOnext", "Configuration Manager")
 
-            if choice is None:           # Exit
-                self._cleanup()
-                sys.exit(0)
-            elif choice == 'live_pins':
-                self._show_live_pins()
-            elif choice == 'hardware_settings':
-                self._show_hardware_settings()
-            elif choice == 'preset':
-                self._load_preset()
-            elif choice == 'export':
-                self._export_config()
-            elif choice == 'import':
-                self._import_config()
-            elif isinstance(choice, dict):
-                device_name = choice['name']
-                if device_name == 'Keyboard':
-                    self._configure_keyboard(choice)
-                elif device_name == 'Commands':
-                    self._configure_commands()
-                elif device_name.startswith('Joypad'):
-                    self._configure_joypad(choice)
-                elif device_name == 'Clear Device':
-                    self._clear_device()
-                elif device_name == 'Edit Existing':
-                    self._edit_existing()
+        # Joypads
+        for i in range(1, 5):
+            menu.append_item(FunctionItem(f"Joypad {i}", self._configure_joypad, [{"name": f"Joypad {i}"}, menu]))
+        
+        menu.append_item(FunctionItem("Keyboard", self._configure_keyboard, [{"name": "Keyboard"}, menu]))
+        menu.append_item(FunctionItem("Commands", self._configure_commands, [menu]))
+        
+        menu.append_item(FunctionItem("Edit existing mapping", self._edit_existing, [menu]))
+        menu.append_item(FunctionItem("Clear a device", self._clear_device, [menu]))
+        
+        menu.append_item(FunctionItem("Live pin monitor", self._show_live_pins))
+        menu.append_item(FunctionItem("Hardware settings", self._show_hardware_settings, [menu]))
+        menu.append_item(FunctionItem("Load HAT preset", self._load_preset, [menu]))
+        menu.append_item(FunctionItem("Export config (JSON)", self._export_config))
+        menu.append_item(FunctionItem("Import config (JSON)", self._import_config))
 
-    def _show_main_menu(self) -> object:
-        """
-        Display the top-level menu and return the user's selection.
-
-        Returns:
-            dict with 'name' key for device/action, or None for exit,
-            or a string key for special actions ('live_pins', 'preset', etc.)
-        """
-        print()
-        print(pcolor('bold', '─' * 50))
-        print(pcolor('cyan', '  GPIOnext Configuration Manager'))
-        print(pcolor('bold', '─' * 50))
-
-        options = [
-            ('1', 'Joypad 1',      {'name': 'Joypad 1'}),
-            ('2', 'Joypad 2',      {'name': 'Joypad 2'}),
-            ('3', 'Joypad 3',      {'name': 'Joypad 3'}),
-            ('4', 'Joypad 4',      {'name': 'Joypad 4'}),
-            ('5', 'Keyboard',      {'name': 'Keyboard'}),
-            ('6', 'Commands',      {'name': 'Commands'}),
-            ('─', '─' * 30,        None),
-            ('7', 'Edit existing mapping', 'edit_existing'),
-            ('8', 'Clear a device',        'clear_device'),
-            ('─', '─' * 30,        None),
-            ('9', 'Live pin monitor',      'live_pins'),
-            ('h', 'Hardware settings',     'hardware_settings'),
-            ('p', 'Load HAT preset',       'preset'),
-            ('e', 'Export config (JSON)',  'export'),
-            ('i', 'Import config (JSON)',  'import'),
-            ('─', '─' * 30,        None),
-            ('q', 'Exit',          None),
-        ]
-
-        for key, label, _ in options:
-            if key == '─':
-                print(pcolor('bold', f'  {label}'))
-            else:
-                print(f'  {pcolor("cyan", key)}) {label}')
-
-        print()
-        choice = input('Select: ').strip().lower()
-
-        for key, _, value in options:
-            if choice == key and key != '─':
-                if key == 'q':
-                    return None
-                elif isinstance(value, str):
-                    return value
-                else:
-                    return value
-        return 'live_pins' if choice == '9' else None
+        menu.show()
+        self._cleanup()
+        sys.exit(0)
 
     # ---------------------------------------------------------------------------
     # Pin detection
@@ -315,17 +261,21 @@ class ConfigurationManager:
     # Device configuration
     # ---------------------------------------------------------------------------
 
-    def _configure_joypad(self, device_info: dict) -> None:
+    def _configure_joypad(self, device_info: dict, parent: CursesMenu = None) -> None:
         """
         Interactively configure axes and buttons for a joypad device.
 
         Parameters:
             device_info (dict): must contain 'name' key (e.g. 'Joypad 1')
+            parent (CursesMenu): the parent menu
         """
         device_name = device_info['name']
-        print(f'\n{pcolor("bold", f"Configuring {device_name}")}')
 
-        axis_count = self._ask_axis_count()
+        # 1. Ask for axis count and button selection before starting pin configuration
+        axis_count = self._ask_axis_count(parent=parent)
+        selected_buttons = self._select_buttons_to_configure(parent=parent)
+
+        print(f'\n{pcolor("bold", f"Configuring {device_name}")}')
         entries: list[tuple] = []
 
         # Axes
@@ -346,7 +296,6 @@ class ConfigurationManager:
                                 f'(3, {axis_code}, {value})', pins_str))
 
         # Buttons
-        selected_buttons = self._select_buttons_to_configure()
         for btn_name, btn_code in selected_buttons:
             label = pcolor('cyan', btn_name)
             print(f'  Hold pin(s) for {label}: ', end='', flush=True)
@@ -361,17 +310,18 @@ class ConfigurationManager:
         SQL.createDevice(entries)
         print(pcolor('green', '  Done.'))
 
-    def _configure_keyboard(self, device_info: dict) -> None:
+    def _configure_keyboard(self, device_info: dict, parent: CursesMenu = None) -> None:
         """
         Interactively configure keyboard key mappings.
 
         Parameters:
             device_info (dict): contains 'name' and 'buttons' (list of (name, code))
+            parent (CursesMenu): the parent menu
         """
         device_name = 'Keyboard'
         print(f'\n{pcolor("bold", "Configuring Keyboard")}')
 
-        selected_keys = self._select_keys_to_configure()
+        selected_keys = self._select_keys_to_configure(parent=parent)
         entries: list[tuple] = []
 
         for key_name, key_code in selected_keys:
@@ -388,37 +338,34 @@ class ConfigurationManager:
         SQL.createDevice(entries)
         print(pcolor('green', '  Done.'))
 
-    def _configure_commands(self) -> None:
+    def _configure_commands(self, parent: CursesMenu = None) -> None:
         """Add, edit, or delete custom GPIO command mappings."""
         while True:
-            print(f'\n{pcolor("bold", "Commands")}')
+            menu = CursesMenu("Commands", "Manage custom GPIO command mappings")
             rows = SQL.getDeviceRaw('Commands')
-
-            for i, row in enumerate(rows, 1):
-                print(f'  {pcolor("cyan", str(i))}. [{row["pins"]}] {row["name"]}: {row["command"]}')
-
-            print(f'\n  {pcolor("cyan", "a")}. Add new command')
-            print(f'  {pcolor("cyan", "d")}. Delete a command')
-            print(f'  {pcolor("cyan", "b")}. Back to main menu')
-
-            choice = input('\n  Select: ').strip().lower()
-
-            if choice == 'b':
+            
+            for row in rows:
+                label = f"[{row['pins']}] {row['name']}: {row['command']}"
+                menu.append_item(FunctionItem(label, self._edit_command, [row], should_exit=True))
+            
+            menu.append_item(FunctionItem("Add new command", self._add_command, should_exit=True))
+            if rows:
+                menu.append_item(FunctionItem("Delete a command", self._delete_command_menu, [parent], should_exit=True))
+            
+            menu.show(parent=parent)
+            if menu.selected_option == -1 or menu.selected_item == menu.exit_item:
                 break
-            elif choice == 'a':
-                self._add_command()
-            elif choice == 'd' and rows:
-                idx = input('  Delete entry #: ').strip()
-                try:
-                    row = rows[int(idx) - 1]
-                    SQL.deleteEntry(row)
-                    print(pcolor('green', '  Deleted.'))
-                except (ValueError, IndexError):
-                    print(pcolor('red', '  Invalid selection.'))
-            elif choice.isdigit():
-                idx = int(choice) - 1
-                if 0 <= idx < len(rows):
-                    self._edit_command(rows[idx])
+
+    def _delete_command_menu(self, parent: CursesMenu = None) -> None:
+        """Sub-menu to select a command for deletion."""
+        rows = SQL.getDeviceRaw('Commands')
+        options = [f"[{row['pins']}] {row['name']}: {row['command']}" for row in rows]
+        selection = SelectionMenu.get_selection(options, "Select command to delete", parent=parent)
+        if selection != -1:
+            confirm = input(f'  Delete {pcolor("red", rows[selection]["name"])}? [y/N]: ').strip().lower()
+            if confirm == 'y':
+                SQL.deleteEntry(rows[selection])
+                print(pcolor('green', '  Deleted.'))
 
     def _add_command(self) -> None:
         """Prompt for a new command name, shell command, and pin assignment."""
@@ -458,35 +405,27 @@ class ConfigurationManager:
     # Edit existing mappings
     # ---------------------------------------------------------------------------
 
-    def _edit_existing(self) -> None:
+    def _edit_existing(self, parent: CursesMenu = None) -> None:
         """Browse all DB mappings and allow the user to edit or delete them."""
-        rows = SQL.getAllRows()
-        if not rows:
-            print(pcolor('yellow', '  No mappings configured yet.'))
-            return
-
         while True:
-            print(f'\n{pcolor("bold", "Edit Existing Mappings")}')
-            for i, row in enumerate(rows, 1):
-                print(f'  {pcolor("cyan", str(i)):>4}. [{row["device"]:10}] '
-                      f'{row["name"]:20} pins={row["pins"]}')
-            print(f'\n  {pcolor("cyan", "b")}. Back')
+            rows = SQL.getAllRows()
+            if not rows:
+                print(pcolor('yellow', '  No mappings configured yet.'))
+                time.sleep(1)
+                return
 
-            choice = input('\n  Select entry # to edit (or b): ').strip().lower()
-            if choice == 'b':
+            options = [f"[{row['device']:10}] {row['name']:20} pins={row['pins']}" for row in rows]
+            selection = SelectionMenu.get_selection(options, "Edit Existing Mappings", parent=parent)
+            
+            if selection == -1:
                 break
-            try:
-                row = rows[int(choice) - 1]
-            except (ValueError, IndexError):
-                print(pcolor('red', '  Invalid selection.'))
-                continue
-
+                
+            row = rows[selection]
             print(f'\n  Editing: [{row["device"]}] {row["name"]} (pins={row["pins"]})')
             action = input('  (r)e-assign pin  (d)elete  (b)ack: ').strip().lower()
 
             if action == 'd':
                 SQL.deleteEntry(row)
-                rows = SQL.getAllRows()
                 print(pcolor('green', '  Deleted.'))
             elif action == 'r':
                 print(f'  Hold new pin(s) for {pcolor("cyan", row["name"])}: ',
@@ -497,147 +436,129 @@ class ConfigurationManager:
                 self.wait_for_release()
                 row['pins'] = pins_str
                 SQL.updateEntry(row)
-                rows = SQL.getAllRows()
                 print(pcolor('green', '  Updated.'))
 
     # ---------------------------------------------------------------------------
     # Clear device
     # ---------------------------------------------------------------------------
 
-    def _clear_device(self) -> None:
+    def _clear_device(self, parent: CursesMenu = None) -> None:
         """Remove all mappings for a selected device."""
-        print(f'\n{pcolor("bold", "Clear Device")}')
-        for i, name in enumerate(DEVICE_LIST, 1):
-            print(f'  {pcolor("cyan", str(i))}. {name}')
-        print(f'  {pcolor("cyan", "b")}. Back')
-
-        choice = input('\n  Select: ').strip().lower()
-        if choice == 'b':
+        selection = SelectionMenu.get_selection(DEVICE_LIST, "Select device to clear", parent=parent)
+        if selection == -1:
             return
-        try:
-            name = DEVICE_LIST[int(choice) - 1]
-        except (ValueError, IndexError):
-            return
+        name = DEVICE_LIST[selection]
         confirm = input(f'  Delete ALL mappings for {pcolor("red", name)}? [y/N]: ').strip().lower()
         if confirm == 'y':
             SQL.deleteDevice(name)
             print(pcolor('green', f'  {name} cleared.'))
 
-    def _show_hardware_settings(self) -> None:
+    def _show_hardware_settings(self, parent: CursesMenu = None) -> None:
         """Menu for I2C baudrate and chip management."""
         import config.baudrate as baudrate
         while True:
-            print(f'\n{pcolor("bold", "Hardware Settings")}')
+            menu = CursesMenu("Hardware Settings", "I2C and chip management")
             
             use_i2c = getattr(self.args, 'use_i2c', False)
             if not use_i2c:
-                print(pcolor('yellow', '  [!] I2C is currently DISABLED.'))
-                print(pcolor('yellow', '      Run "gpionext set use_i2c true" to enable.'))
-                print()
+                menu.subtitle = "I2C is DISABLED (use 'gpionext set use_i2c true')"
 
-            print(f'  {pcolor("cyan", "1")}. I2C Baudrate (Current: {baudrate.get_current_baudrate()} Hz)')
-            print(f'  {pcolor("cyan", "2")}. Manage MCP23017 chips')
-            print(f'  {pcolor("cyan", "3")}. Manage ADS1115 chips')
-            print(f'  {pcolor("cyan", "b")}. Back')
-
-            choice = input('\n  Select: ').strip().lower()
-            if choice == 'b':
+            menu.append_item(FunctionItem(f"I2C Baudrate (Current: {baudrate.get_current_baudrate()} Hz)", 
+                                         self._configure_baudrate, [parent], should_exit=True))
+            menu.append_item(FunctionItem("Manage MCP23017 chips", self._manage_mcp23017, [parent], should_exit=True))
+            menu.append_item(FunctionItem("Manage ADS1115 chips", self._manage_ads1115, [parent], should_exit=True))
+            
+            menu.show(parent=parent)
+            if menu.selected_option == -1 or menu.selected_item == menu.exit_item:
                 break
-            elif choice == '1':
-                self._configure_baudrate()
-            elif choice == '2':
-                self._manage_mcp23017()
-            elif choice == '3':
-                self._manage_ads1115()
 
-    def _configure_baudrate(self) -> None:
+    def _configure_baudrate(self, parent: CursesMenu = None) -> None:
         import config.baudrate as baudrate
-        print(f'\n{pcolor("bold", "Configure I2C Baudrate")}')
-        print(baudrate.ADVANCED_WARNING)
-        print(f'\n  {pcolor("cyan", "1")}. Default (100,000 Hz)')
-        print(f'  {pcolor("cyan", "2")}. Fast    (400,000 Hz)')
-        print(f'  {pcolor("cyan", "b")}. Back')
-
-        choice = input('\n  Select: ').strip().lower()
-        if choice == '1':
+        options = ["Default (100,000 Hz)", "Fast (400,000 Hz)"]
+        selection = SelectionMenu.get_selection(options, "Configure I2C Baudrate", baudrate.ADVANCED_WARNING, parent=parent)
+        if selection == 0:
             if baudrate.set_baudrate(100000):
                 print(pcolor('green', '  Baudrate set to 100kHz. Reboot required.'))
-        elif choice == '2':
+        elif selection == 1:
             if baudrate.set_baudrate(400000):
                 print(pcolor('green', '  Baudrate set to 400kHz. Reboot required.'))
 
-    def _manage_mcp23017(self) -> None:
+    def _manage_mcp23017(self, parent: CursesMenu = None) -> None:
         while True:
-            print(f'\n{pcolor("bold", "Manage MCP23017 Chips")}')
+            menu = CursesMenu("Manage MCP23017 Chips")
             rows = SQL._cursor.execute('SELECT * FROM I2C_MCP23017').fetchall()
-            for i, row in enumerate(rows, 1):
+            for row in rows:
                 int_pin = row['int_pin'] if row['int_pin'] else "None"
-                print(f'  {pcolor("cyan", str(i))}. Bus {row["bus"]}, Addr 0x{row["address"]:02X}, Int Pin: {int_pin}')
+                label = f"Bus {row['bus']}, Addr 0x{row['address']:02X}, Int Pin: {int_pin}"
+                menu.append_item(MenuItem(label)) # Just info for now, maybe add edit later
+
+            menu.append_item(FunctionItem("Add new chip", self._add_mcp23017, should_exit=True))
+            if rows:
+                menu.append_item(FunctionItem("Delete a chip", self._delete_mcp23017_menu, [parent], should_exit=True))
             
-            print(f'\n  {pcolor("cyan", "a")}. Add new chip')
-            print(f'  {pcolor("cyan", "d")}. Delete a chip')
-            print(f'  {pcolor("cyan", "b")}. Back')
-
-            choice = input('\n  Select: ').strip().lower()
-            if choice == 'b':
+            menu.show(parent=parent)
+            if menu.selected_option == -1 or menu.selected_item == menu.exit_item:
                 break
-            elif choice == 'a':
-                try:
-                    bus_str = input('  I2C Bus [1]: ').strip() or '1'
-                    bus = int(bus_str)
-                    addr_str = input('  I2C Address (hex) [0x20]: ').strip() or '0x20'
-                    addr = int(addr_str, 16)
-                    int_pin_str = input('  Interrupt Pin (BOARD) [None]: ').strip()
-                    int_pin = int(int_pin_str) if int_pin_str else None
-                    SQL._cursor.execute('INSERT INTO I2C_MCP23017 (bus, address, int_pin) VALUES (?,?,?)', (bus, addr, int_pin))
-                    SQL._conn.commit()
-                    print(pcolor('green', '  Chip added.'))
-                except ValueError:
-                    print(pcolor('red', '  Invalid input.'))
-            elif choice == 'd' and rows:
-                try:
-                    idx = int(input('  Delete chip #: ').strip())
-                    row = rows[idx - 1]
-                    SQL._cursor.execute('DELETE FROM I2C_MCP23017 WHERE id = ?', (row['id'],))
-                    SQL._conn.commit()
-                    print(pcolor('green', '  Deleted.'))
-                except (ValueError, IndexError):
-                    print(pcolor('red', '  Invalid selection.'))
 
-    def _manage_ads1115(self) -> None:
+    def _add_mcp23017(self) -> None:
+        try:
+            bus_str = input('  I2C Bus [1]: ').strip() or '1'
+            bus = int(bus_str)
+            addr_str = input('  I2C Address (hex) [0x20]: ').strip() or '0x20'
+            addr = int(addr_str, 16)
+            int_pin_str = input('  Interrupt Pin (BOARD) [None]: ').strip()
+            int_pin = int(int_pin_str) if int_pin_str else None
+            SQL._cursor.execute('INSERT INTO I2C_MCP23017 (bus, address, int_pin) VALUES (?,?,?)', (bus, addr, int_pin))
+            SQL._conn.commit()
+            print(pcolor('green', '  Chip added.'))
+        except ValueError:
+            print(pcolor('red', '  Invalid input.'))
+
+    def _delete_mcp23017_menu(self, parent: CursesMenu = None) -> None:
+        rows = SQL._cursor.execute('SELECT * FROM I2C_MCP23017').fetchall()
+        options = [f"Bus {row['bus']}, Addr 0x{row['address']:02X}" for row in rows]
+        selection = SelectionMenu.get_selection(options, "Select MCP23017 to delete", parent=parent)
+        if selection != -1:
+            SQL._cursor.execute('DELETE FROM I2C_MCP23017 WHERE id = ?', (rows[selection]['id'],))
+            SQL._conn.commit()
+            print(pcolor('green', '  Deleted.'))
+
+    def _manage_ads1115(self, parent: CursesMenu = None) -> None:
         while True:
-            print(f'\n{pcolor("bold", "Manage ADS1115 Chips")}')
+            menu = CursesMenu("Manage ADS1115 Chips")
             rows = SQL._cursor.execute('SELECT * FROM I2C_ADS1115').fetchall()
-            for i, row in enumerate(rows, 1):
-                print(f'  {pcolor("cyan", str(i))}. Bus {row["bus"]}, Addr 0x{row["address"]:02X}')
-            
-            print(f'\n  {pcolor("cyan", "a")}. Add new chip')
-            print(f'  {pcolor("cyan", "d")}. Delete a chip')
-            print(f'  {pcolor("cyan", "b")}. Back')
+            for row in rows:
+                label = f"Bus {row['bus']}, Addr 0x{row['address']:02X}"
+                menu.append_item(MenuItem(label))
 
-            choice = input('\n  Select: ').strip().lower()
-            if choice == 'b':
+            menu.append_item(FunctionItem("Add new chip", self._add_ads1115, should_exit=True))
+            if rows:
+                menu.append_item(FunctionItem("Delete a chip", self._delete_ads1115_menu, [parent], should_exit=True))
+            
+            menu.show(parent=parent)
+            if menu.selected_option == -1 or menu.selected_item == menu.exit_item:
                 break
-            elif choice == 'a':
-                try:
-                    bus_str = input('  I2C Bus [1]: ').strip() or '1'
-                    bus = int(bus_str)
-                    addr_str = input('  I2C Address (hex) [0x48]: ').strip() or '0x48'
-                    addr = int(addr_str, 16)
-                    SQL._cursor.execute('INSERT INTO I2C_ADS1115 (bus, address) VALUES (?,?)', (bus, addr))
-                    SQL._conn.commit()
-                    print(pcolor('green', '  Chip added.'))
-                except ValueError:
-                    print(pcolor('red', '  Invalid input.'))
-            elif choice == 'd' and rows:
-                try:
-                    idx = int(input('  Delete chip #: ').strip())
-                    row = rows[idx - 1]
-                    SQL._cursor.execute('DELETE FROM I2C_ADS1115 WHERE id = ?', (row['id'],))
-                    SQL._conn.commit()
-                    print(pcolor('green', '  Deleted.'))
-                except (ValueError, IndexError):
-                    print(pcolor('red', '  Invalid selection.'))
+
+    def _add_ads1115(self) -> None:
+        try:
+            bus_str = input('  I2C Bus [1]: ').strip() or '1'
+            bus = int(bus_str)
+            addr_str = input('  I2C Address (hex) [0x48]: ').strip() or '0x48'
+            addr = int(addr_str, 16)
+            SQL._cursor.execute('INSERT INTO I2C_ADS1115 (bus, address) VALUES (?,?)', (bus, addr))
+            SQL._conn.commit()
+            print(pcolor('green', '  Chip added.'))
+        except ValueError:
+            print(pcolor('red', '  Invalid input.'))
+
+    def _delete_ads1115_menu(self, parent: CursesMenu = None) -> None:
+        rows = SQL._cursor.execute('SELECT * FROM I2C_ADS1115').fetchall()
+        options = [f"Bus {row['bus']}, Addr 0x{row['address']:02X}" for row in rows]
+        selection = SelectionMenu.get_selection(options, "Select ADS1115 to delete", parent=parent)
+        if selection != -1:
+            SQL._cursor.execute('DELETE FROM I2C_ADS1115 WHERE id = ?', (rows[selection]['id'],))
+            SQL._conn.commit()
+            print(pcolor('green', '  Deleted.'))
 
     # ---------------------------------------------------------------------------
     # Live pin monitor
@@ -672,25 +593,19 @@ class ConfigurationManager:
     # HAT preset loader
     # ---------------------------------------------------------------------------
 
-    def _load_preset(self) -> None:
+    def _load_preset(self, parent: CursesMenu = None) -> None:
         """Let the user pick a HAT preset and apply it to the database."""
         from ui.hat_presets import get_preset_names, get_display_name, preset_to_db_rows
 
         keys = get_preset_names()
-        print(f'\n{pcolor("bold", "Load HAT Preset")}')
-        for i, key in enumerate(keys, 1):
-            print(f'  {pcolor("cyan", str(i))}. {get_display_name(key)}')
-        print(f'  {pcolor("cyan", "b")}. Back')
+        display_names = [get_display_name(k) for k in keys]
+        selection = SelectionMenu.get_selection(display_names, "Load HAT Preset", parent=parent)
 
-        choice = input('\n  Select: ').strip().lower()
-        if choice == 'b':
+        
+        if selection == -1:
             return
-        try:
-            key = keys[int(choice) - 1]
-        except (ValueError, IndexError):
-            print(pcolor('red', '  Invalid selection.'))
-            return
-
+            
+        key = keys[selection]
         rows = preset_to_db_rows(key)
         if not rows:
             print(pcolor('red', '  Preset is empty or invalid.'))
@@ -747,56 +662,44 @@ class ConfigurationManager:
     # Selection helpers
     # ---------------------------------------------------------------------------
 
-    def _ask_axis_count(self) -> int:
+    def _ask_axis_count(self, parent: CursesMenu = None) -> int:
         """
         Ask how many D-pads/joystick axes the joypad device should have.
 
         Returns:
             int: number of axes (1-4)
         """
-        print()
-        for i in range(1, 5):
-            print(f'  {pcolor("cyan", str(i))}. {i} D-pad{"s" if i > 1 else ""} / joystick{"s" if i > 1 else ""}')
-        try:
-            return max(1, min(4, int(input('\n  How many D-pads/joysticks? [1]: ').strip() or '1')))
-        except ValueError:
+        options = [f"{i} D-pad{'s' if i > 1 else ''} / joystick{'s' if i > 1 else ''}" for i in range(1, 5)]
+        selection = SelectionMenu.get_selection(options, "How many D-pads/joysticks?", parent=parent)
+        if selection == -1 or selection >= len(options):
             return 1
+        return selection + 1
 
-    def _select_buttons_to_configure(self) -> list[tuple[str, int]]:
+    def _select_buttons_to_configure(self, parent: CursesMenu = None) -> list[tuple[str, int]]:
         """
         Show BUTTON_LIST and let the user pick which buttons to configure.
         Returns the selected (name, evdev_code) pairs.
         """
-        print(f'\n{pcolor("bold", "Select buttons to configure:")}')
-        for i, (name, _) in enumerate(BUTTON_LIST, 1):
-            print(f'  {pcolor("cyan", str(i)):>5}. {name}')
-        print(f'\n  Enter numbers separated by commas, or "all" for all buttons:')
-        raw = input('  Selection: ').strip().lower()
-        if raw == 'all':
-            return list(BUTTON_LIST)
-        try:
-            indices = [int(x.strip()) - 1 for x in raw.split(',')]
-            return [BUTTON_LIST[i] for i in indices if 0 <= i < len(BUTTON_LIST)]
-        except (ValueError, IndexError):
+        names = [name for name, _ in BUTTON_LIST]
+        selected_names = MultiSelect.get_selection(names, "Select buttons to configure", "Space: toggle | Enter: continue", parent=parent)
+        
+        if not selected_names or selected_names == [-1]:
             return []
+        
+        return [btn for btn in BUTTON_LIST if btn[0] in selected_names]
 
-    def _select_keys_to_configure(self) -> list[tuple[str, int]]:
+    def _select_keys_to_configure(self, parent: CursesMenu = None) -> list[tuple[str, int]]:
         """
         Show KEY_LIST and let the user pick which keys to configure.
         Returns the selected (name, evdev_code) pairs.
         """
-        print(f'\n{pcolor("bold", "Select keys to configure:")}')
-        for i, (name, _) in enumerate(KEY_LIST, 1):
-            print(f'  {pcolor("cyan", str(i)):>5}. {name}')
-        print(f'\n  Enter numbers separated by commas, or "all":')
-        raw = input('  Selection: ').strip().lower()
-        if raw == 'all':
-            return list(KEY_LIST)
-        try:
-            indices = [int(x.strip()) - 1 for x in raw.split(',')]
-            return [KEY_LIST[i] for i in indices if 0 <= i < len(KEY_LIST)]
-        except (ValueError, IndexError):
+        names = [name for name, _ in KEY_LIST]
+        selected_names = MultiSelect.get_selection(names, "Select keys to configure", "Space: toggle | Enter: continue", parent=parent)
+        
+        if not selected_names or selected_names == [-1]:
             return []
+            
+        return [key for key in KEY_LIST if key[0] in selected_names]
 
     # ---------------------------------------------------------------------------
     # Utilities

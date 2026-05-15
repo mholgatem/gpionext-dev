@@ -16,18 +16,19 @@ class SelectionMenu(CursesMenu):
             self.append_item(SelectionItem(item, index, self))
 
     @classmethod
-    def get_selection(cls, strings, title="Select an option", subtitle=None, exit_option=True, _menu=None):
+    def get_selection(cls, strings, title="Select an option", subtitle=None, exit_option=True, _menu=None, parent=None):
         """
         Single-method way of getting a selection out of a list of strings
 
         :param list[str] strings: the list of string used to build the menu
         :param list _menu: should probably only be used for testing, pass in a list and the created menu used \
         internally by the method will be appended to it
+        :param CursesMenu parent: the parent menu
         """
         menu = cls(strings, title, subtitle, exit_option)
         if _menu is not None:
             _menu.append(menu)
-        menu.show()
+        menu.show(parent=parent)
         menu.join()
         return menu.selected_option
 
