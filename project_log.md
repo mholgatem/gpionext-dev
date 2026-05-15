@@ -1,7 +1,7 @@
 # Project Log
 
 ## Status
-Active — curses menu selected-item tracking now returns the selected option, making exit-item comparisons reliable after navigation changes.
+Active — MultiSelect button/key configuration now normalizes cancellation results and compares selections by label sets.
 
 ## Last Updated
 2026-05-15
@@ -25,6 +25,7 @@ Active — curses menu selected-item tracking now returns the selected option, m
 - [x] Ensured SQL-backed command, mapping, MCP23017, and ADS1115 management loops return to their rebuild loops after mutating actions so fresh rows are fetched.
 - [x] Replaced the no-mappings `time.sleep(1)` feedback path in `_edit_existing()` with a menu-safe `_show_message()` prompt.
 - [x] Corrected `CursesMenu.selected_item` to return `items[selected_option]` while preserving the existing no-selection guard, improving callers that compare selected items against `exit_item`.
+- [x] Normalized `MultiSelect` button/key selections in `config_manager.py`, treating `None`, `[]`, and `[-1]` as cancellation and comparing valid item labels via `set[str]`.
 
 ## Known Issues & Lessons Learned
 - Nested curses selection menus should receive the immediate active submenu as `parent`; passing the grandparent can break return/redraw behavior when exiting child menus.
@@ -35,3 +36,4 @@ Active — curses menu selected-item tracking now returns the selected option, m
 - Direct yes/no `input()` prompts drift from menu UX; future confirmations should use `_confirm()`.
 - Direct `print()` calls are poor UI feedback while curses menus are active; future status/success/error feedback in menu workflows should prefer `_show_message()` or `_show_status()` depending on whether acknowledgement is needed.
 - `selected_item` must reflect `selected_option`, not the currently highlighted `current_option`; callers may compare `menu.selected_item == menu.exit_item` after selection handling changes the highlighted row.
+- `MultiSelect.get_selection()` returns selected item labels for successful selections, but may return sentinel cancellation values (`None`, `[]`, or `[-1]`); normalize those sentinels before converting labels to a comparison set.
