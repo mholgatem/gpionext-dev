@@ -48,6 +48,13 @@ class Pcf8574ConfigTests(unittest.TestCase):
 
         self.assertEqual([{"bus": 1, "address": 0x20, "int_pin": 7}], config["i2c_pcf8574"])
 
+    def test_core_build_configuration_enables_i2c_feature(self):
+        pyproject = (REPO_ROOT / "core" / "pyproject.toml").read_text()
+        workflow = (REPO_ROOT / ".github" / "workflows" / "build.yml").read_text()
+
+        self.assertIn('features = ["i2c"]', pyproject)
+        self.assertIn('--features i2c', workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

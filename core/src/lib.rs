@@ -38,6 +38,16 @@ fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// Returns true when this extension was compiled with I2C driver support.
+///
+/// The Python UI uses this to warn when I2C chips are configured but the
+/// installed Rust extension was built without the `i2c` feature; in that case
+/// virtual I2C pins can be displayed from SQLite but will never change state.
+#[pyfunction]
+fn i2c_enabled() -> bool {
+    cfg!(feature = "i2c")
+}
+
 /// Returns the current pressed-pin bitmask as a single arbitrary-precision integer.
 /// This allows Python code to perform bitwise operations directly (e.g. `bitmask & (1 << pin)`).
 /// Now supports up to 256 bits (64 physical GPIO + 192 virtual I2C).
@@ -558,6 +568,7 @@ fn parse_axis_command(s: &str, name: &str) -> PyResult<(u32, u32, i32)> {
 #[pymodule]
 fn gpionext_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(version, m)?)?;
+    m.add_function(wrap_pyfunction!(i2c_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(get_pin_states, m)?)?;
     m.add_class::<GpioCore>()?;
     Ok(())

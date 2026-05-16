@@ -51,6 +51,7 @@ Active — PCF8574 support has been added alongside MCP23017 and ADS1115, includ
 - [x] Added unit coverage for PCF8574 pin IDs, virtual mapping, available I2C pin listing, and config export.
 
 ## Known Issues & Lessons Learned
+- Seeing configured virtual I2C pins in the UI does not prove Rust I2C polling is active; the release workflow previously built `gpionext_core` with `--features gpio`, so I2C poller code was compiled out and all virtual I2C pins stayed inactive. Future I2C changes must verify `cargo check --features i2c` and release/maturin feature flags.
 - Multi-select menus intentionally use `selected_option` as a list of selected labels; do not route that list through `CursesMenu.selected_item`, which expects an integer index.
 - Nested curses selection menus should receive the immediate active submenu as `parent`; passing the grandparent can break return/redraw behavior when exiting child menus.
 - SQL-backed menus should exit child selections after mutating actions and re-enter their outer loops so displayed rows are fetched from the database again.

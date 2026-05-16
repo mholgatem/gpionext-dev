@@ -147,11 +147,23 @@ class ConfigurationManager:
         self._core = gpionext_core.GpioCore()
         try:
             config_dict = SQL.buildConfigDict(self.args)
+            if self._i2c_configured(config_dict) and not getattr(gpionext_core, 'i2c_enabled', lambda: False)():
+                print(pcolor('yellow', 'WARNING: gpionext_core was built without I2C support.'))
+                print(pcolor('yellow', 'Configured I2C virtual pins will be visible but inactive until the core is rebuilt with --features i2c.'))
             self._core.start_monitor(config_dict)
         except RuntimeError as exc:
             print(pcolor('yellow', f'WARNING: GPIO monitor failed to start: {exc}'))
             print(pcolor('yellow', 'Pin detection will be disabled.'))
             self._core = None
+
+
+    @staticmethod
+    def _i2c_configured(config_dict: dict) -> bool:
+        """Return True when the runtime config contains any I2C chip rows."""
+        return any(
+            config_dict.get(key)
+            for key in ('i2c_mcp23017', 'i2c_ads1115', 'i2c_pcf8574')
+        )
 
     def _signal_handler(self, sig: int, frame) -> None:
         """Clean exit on SIGTERM/SIGINT/SIGQUIT."""

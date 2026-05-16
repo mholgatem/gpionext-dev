@@ -16,4 +16,4 @@ classifiers = [
 [tool.maturin]
 # Module name as imported in Python: import gpionext_core
 module-name = "gpionext_core"
-features = ["pyo3/extension-module"]
+features = ["i2c"]
