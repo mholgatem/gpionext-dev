@@ -1,7 +1,7 @@
 # Project Log
 
 ## Status
-Active — I2C support now includes PCF8574 and release/local builds enable the Rust `i2c` feature so MCP23017/ADS1115/PCF8574 pollers can actually drive virtual pin state.
+Active — PCF8574 support has been added alongside MCP23017 and ADS1115, including SQL config, curses management UI, virtual pin mapping, Rust polling, and live-pin labels.
 
 ## Last Updated
 2026-05-16
@@ -13,7 +13,7 @@ Active — I2C support now includes PCF8574 and release/local builds enable the 
 - GPIO capture UI is centralized through `_capture_pins()`, which now treats an empty pin list as cancellation/unavailability and lets callers abort cleanly before database writes.
 - Configuration data is persisted through `config.SQL`, including device mappings, command mappings, MCP23017/ADS1115/PCF8574 I2C chip configuration, and JSON import/export.
 - Stored DB `pins` values are parsed through shared `config.SQL` helpers so single pins, tuple/list combos, and MCP23017 (`i2c-0x20-A0`), ADS1115 (`i2c-0x48-ch0`), and PCF8574 (`i2c-0x20-P0`) virtual I2C strings are handled without `eval`.
-- Full-screen live monitoring is delegated to `python/ui/live_pin_view.py`; the main config manager owns menu workflows and database writes, including configured I2C virtual pin display. Runtime I2C polling only works when `gpionext_core.i2c_enabled()` is true.
+- Full-screen live monitoring is delegated to `python/ui/live_pin_view.py`; the main config manager owns menu workflows and database writes, including configured I2C virtual pin display.
 
 ## Completed Milestones
 - [x] Initialized this project log as the long-term memory/source of truth for the current session.
@@ -49,9 +49,6 @@ Active — I2C support now includes PCF8574 and release/local builds enable the 
 - [x] Implemented the Rust `Pcf8574` I2C driver using direct byte reads/writes instead of MCP23017 register access.
 - [x] Added PCF8574 management menus and live-pin display labels beside existing MCP23017 and ADS1115 UI support.
 - [x] Added unit coverage for PCF8574 pin IDs, virtual mapping, available I2C pin listing, and config export.
-- [x] Fixed the build configuration so release and local maturin builds compile `gpionext_core` with the Rust `i2c` feature instead of GPIO-only support.
-- [x] Added a `gpionext_core.i2c_enabled()` runtime feature probe and Python warnings when I2C chips are configured but the installed core lacks I2C support.
-- [x] Added regression coverage to ensure build metadata keeps the `i2c` feature enabled.
 
 ## Known Issues & Lessons Learned
 - Seeing configured virtual I2C pins in the UI does not prove Rust I2C polling is active; the release workflow previously built `gpionext_core` with `--features gpio`, so I2C poller code was compiled out and all virtual I2C pins stayed inactive. Future I2C changes must verify `cargo check --features i2c` and release/maturin feature flags.
