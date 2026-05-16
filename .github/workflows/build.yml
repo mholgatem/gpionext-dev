@@ -75,7 +75,7 @@ jobs:
             --out dist
             --zig
             -i python3.11
-            --features gpio
+            --features i2c
           # manylinux: off = build against the runner's glibc (fine for Pi OS)
           manylinux: off
           before-script-linux: ""

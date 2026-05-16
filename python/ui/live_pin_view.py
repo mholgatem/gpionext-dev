@@ -71,6 +71,25 @@ def _build_pin_labels(all_pins: list[int], db_rows: list[dict]) -> dict[int, str
     return labels
 
 
+
+
+def _display_pin_name(pin: int) -> str:
+    """Return a clear display name for physical and virtual pins."""
+    if pin >= 192:
+        addr = 0x20 + (pin - 192) // 8
+        pcf_pin = (pin - 192) % 8
+        return f"PCF8574 0x{addr:02X} P{pcf_pin}"
+    if pin >= 128:
+        addr = 0x48 + (pin - 128) // 4
+        channel = (pin - 128) % 4
+        return f"ADS1115 0x{addr:02X} CH{channel}"
+    if pin >= 64:
+        addr = 0x20 + (pin - 64) // 16
+        port = 'A' if ((pin - 64) % 16) < 8 else 'B'
+        bit = (pin - 64) % 8
+        return f"MCP23017 0x{addr:02X} {port}{bit}"
+    return f"BOARD {pin}"
+
 # ---------------------------------------------------------------------------
 # Main view class
 # ---------------------------------------------------------------------------
@@ -183,11 +202,11 @@ class LivePinView:
             label = self.labels.get(pin, 'unmapped')
 
             # Truncate label to available width
-            label_width = max_x - 14
+            label_width = max_x - 22
             if len(label) > label_width:
                 label = label[:label_width - 1] + '\u2026'
 
-            line = f"  {'BOARD ' + str(pin):>10}   {state_char}   {label}"
+            line = f"  {_display_pin_name(pin):>18}   {state_char}   {label}"
 
             if pressed:
                 attr = curses.color_pair(2) | curses.A_BOLD

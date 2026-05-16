@@ -1,3 +1,5 @@
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyList};
 /// gpionext_core — PyO3 extension module
 ///
 /// Exposes the following to Python:
@@ -15,15 +17,13 @@
 /// core.stop()
 /// ```
 use std::sync::Arc;
-use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
 
 mod bitmask;
 mod gpio;
 mod i2c;
 mod uinput;
 
-use bitmask::{EventType, Peripheral, build_config, init_pool, set_config, set_config_arc};
+use bitmask::{build_config, init_pool, set_config, set_config_arc, EventType, Peripheral};
 
 // ---------------------------------------------------------------------------
 // Module-level functions
@@ -38,25 +38,36 @@ fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// Returns true when this extension was compiled with I2C driver support.
+///
+/// The Python UI uses this to warn when I2C chips are configured but the
+/// installed Rust extension was built without the `i2c` feature; in that case
+/// virtual I2C pins can be displayed from SQLite but will never change state.
+#[pyfunction]
+fn i2c_enabled() -> bool {
+    cfg!(feature = "i2c")
+}
+
 /// Returns the current pressed-pin bitmask as a single arbitrary-precision integer.
 /// This allows Python code to perform bitwise operations directly (e.g. `bitmask & (1 << pin)`).
-/// Now supports up to 192 bits (64 physical GPIO + 128 virtual I2C).
+/// Now supports up to 256 bits (64 physical GPIO + 192 virtual I2C).
 ///
 /// # Returns
-/// `int` — current bitmask of all 192 potential pins
+/// `int` — current bitmask of all 256 potential pins
 #[pyfunction]
 fn get_pin_states(py: Python<'_>) -> PyResult<PyObject> {
-    let (w0, w1, w2) = bitmask::current_bitmask();
-    let mut bytes = [0u8; 24];
-    bytes[0..8].copy_from_slice(&w0.to_le_bytes());
-    bytes[8..16].copy_from_slice(&w1.to_le_bytes());
-    bytes[16..24].copy_from_slice(&w2.to_le_bytes());
+    let words = bitmask::current_bitmask();
+    let mut bytes = [0u8; 32];
+    bytes[0..8].copy_from_slice(&words[0].to_le_bytes());
+    bytes[8..16].copy_from_slice(&words[1].to_le_bytes());
+    bytes[16..24].copy_from_slice(&words[2].to_le_bytes());
+    bytes[24..32].copy_from_slice(&words[3].to_le_bytes());
 
     // Construct a Python 'int' from these 24 bytes (little-endian, unsigned)
     let int_obj = py
         .get_type::<pyo3::types::PyLong>()
         .call_method1("from_bytes", (bytes.as_slice(), "little"))?;
-    
+
     Ok(int_obj.unbind())
 }
 
@@ -107,7 +118,8 @@ impl GpioCore {
     /// # Errors
     /// Raises `RuntimeError` if GPIO setup fails (missing module, bad pin, etc.)
     fn start(&mut self, config: &Bound<'_, PyDict>) -> PyResult<()> {
-        self.running.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.running
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         let combo_delay: u64 = config
             .get_item("combo_delay")?
             .map(|v| v.extract())
@@ -155,9 +167,15 @@ impl GpioCore {
         uinput::open_all(&config_arc);
 
         // Start GPIO event loop (stub until libgpiod feature enabled)
-        let gpio_config = gpio::GpioConfig { pins, pulldown, debounce_ms: debounce };
+        let gpio_config = gpio::GpioConfig {
+            pins,
+            pulldown,
+            debounce_ms: debounce,
+        };
         match gpio::GpioLoop::run(&gpio_config, &skip_pins) {
-            Ok(lp) => { self.gpio_loop = Some(lp); }
+            Ok(lp) => {
+                self.gpio_loop = Some(lp);
+            }
             Err(e) => return Err(pyo3::exceptions::PyRuntimeError::new_err(e.to_string())),
         }
 
@@ -168,13 +186,47 @@ impl GpioCore {
                 let list = mcp_list.downcast::<PyList>()?;
                 for item in list.iter() {
                     let d = item.downcast::<PyDict>()?;
-                    let bus: u8 = d.get_item("bus")?.map(|v| v.extract()).transpose()?.unwrap_or(1);
-                    let addr: u8 = d.get_item("address")?.map(|v| v.extract()).transpose()?.unwrap_or(0x20);
-                    let int_pin: Option<u8> = d.get_item("int_pin")?.map(|v| v.extract()).transpose()?;
-                    
+                    let bus: u8 = d
+                        .get_item("bus")?
+                        .map(|v| v.extract())
+                        .transpose()?
+                        .unwrap_or(1);
+                    let addr: u8 = d
+                        .get_item("address")?
+                        .map(|v| v.extract())
+                        .transpose()?
+                        .unwrap_or(0x20);
+                    let int_pin: Option<u8> =
+                        d.get_item("int_pin")?.map(|v| v.extract()).transpose()?;
+
                     if let Ok(mcp) = i2c::Mcp23017::new(bus, addr, int_pin) {
                         let r = self.running.clone();
-                        self.i2c_threads.push(std::thread::spawn(move || mcp.poll(r)));
+                        self.i2c_threads
+                            .push(std::thread::spawn(move || mcp.poll(r)));
+                    }
+                }
+            }
+            if let Some(pcf_list) = config.get_item("i2c_pcf8574")? {
+                let list = pcf_list.downcast::<PyList>()?;
+                for item in list.iter() {
+                    let d = item.downcast::<PyDict>()?;
+                    let bus: u8 = d
+                        .get_item("bus")?
+                        .map(|v| v.extract())
+                        .transpose()?
+                        .unwrap_or(1);
+                    let addr: u8 = d
+                        .get_item("address")?
+                        .map(|v| v.extract())
+                        .transpose()?
+                        .unwrap_or(0x20);
+                    let int_pin: Option<u8> =
+                        d.get_item("int_pin")?.map(|v| v.extract()).transpose()?;
+
+                    if let Ok(pcf) = i2c::Pcf8574::new(bus, addr, int_pin) {
+                        let r = self.running.clone();
+                        self.i2c_threads
+                            .push(std::thread::spawn(move || pcf.poll(r)));
                     }
                 }
             }
@@ -182,12 +234,21 @@ impl GpioCore {
                 let list = ads_list.downcast::<PyList>()?;
                 for item in list.iter() {
                     let d = item.downcast::<PyDict>()?;
-                    let bus: u8 = d.get_item("bus")?.map(|v| v.extract()).transpose()?.unwrap_or(1);
-                    let addr: u8 = d.get_item("address")?.map(|v| v.extract()).transpose()?.unwrap_or(0x48);
-                    
+                    let bus: u8 = d
+                        .get_item("bus")?
+                        .map(|v| v.extract())
+                        .transpose()?
+                        .unwrap_or(1);
+                    let addr: u8 = d
+                        .get_item("address")?
+                        .map(|v| v.extract())
+                        .transpose()?
+                        .unwrap_or(0x48);
+
                     if let Ok(ads) = i2c::Ads1115::new(bus, addr) {
                         let r = self.running.clone();
-                        self.i2c_threads.push(std::thread::spawn(move || ads.poll(r)));
+                        self.i2c_threads
+                            .push(std::thread::spawn(move || ads.poll(r)));
                     }
                 }
             }
@@ -198,7 +259,8 @@ impl GpioCore {
 
     /// Stop the GPIO event loop and flush all active uinput devices.
     fn stop(&mut self) -> PyResult<()> {
-        self.running.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.running
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         if let Some(lp) = self.gpio_loop.take() {
             lp.stop();
         }
@@ -232,7 +294,8 @@ impl GpioCore {
     /// # Errors
     /// Raises `RuntimeError` if GPIO setup fails.
     fn start_monitor(&mut self, config: &Bound<'_, PyDict>) -> PyResult<()> {
-        self.running.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.running
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         init_pool(4); // smaller pool — config tool doesn't need combo resolution
 
         let pins: Vec<u8> = config
@@ -260,9 +323,15 @@ impl GpioCore {
         // but dispatch_press is never called
         set_config(build_config(vec![], 50, 350));
 
-        let gpio_config = gpio::GpioConfig { pins, pulldown, debounce_ms: debounce };
+        let gpio_config = gpio::GpioConfig {
+            pins,
+            pulldown,
+            debounce_ms: debounce,
+        };
         match gpio::GpioLoop::run(&gpio_config, &skip_pins) {
-            Ok(lp) => { self.gpio_loop = Some(lp); }
+            Ok(lp) => {
+                self.gpio_loop = Some(lp);
+            }
             Err(e) => return Err(pyo3::exceptions::PyRuntimeError::new_err(e.to_string())),
         }
 
@@ -273,13 +342,47 @@ impl GpioCore {
                 let list = mcp_list.downcast::<PyList>()?;
                 for item in list.iter() {
                     let d = item.downcast::<PyDict>()?;
-                    let bus: u8 = d.get_item("bus")?.map(|v| v.extract()).transpose()?.unwrap_or(1);
-                    let addr: u8 = d.get_item("address")?.map(|v| v.extract()).transpose()?.unwrap_or(0x20);
-                    let int_pin: Option<u8> = d.get_item("int_pin")?.map(|v| v.extract()).transpose()?;
-                    
+                    let bus: u8 = d
+                        .get_item("bus")?
+                        .map(|v| v.extract())
+                        .transpose()?
+                        .unwrap_or(1);
+                    let addr: u8 = d
+                        .get_item("address")?
+                        .map(|v| v.extract())
+                        .transpose()?
+                        .unwrap_or(0x20);
+                    let int_pin: Option<u8> =
+                        d.get_item("int_pin")?.map(|v| v.extract()).transpose()?;
+
                     if let Ok(mcp) = i2c::Mcp23017::new(bus, addr, int_pin) {
                         let r = self.running.clone();
-                        self.i2c_threads.push(std::thread::spawn(move || mcp.poll(r)));
+                        self.i2c_threads
+                            .push(std::thread::spawn(move || mcp.poll(r)));
+                    }
+                }
+            }
+            if let Some(pcf_list) = config.get_item("i2c_pcf8574")? {
+                let list = pcf_list.downcast::<PyList>()?;
+                for item in list.iter() {
+                    let d = item.downcast::<PyDict>()?;
+                    let bus: u8 = d
+                        .get_item("bus")?
+                        .map(|v| v.extract())
+                        .transpose()?
+                        .unwrap_or(1);
+                    let addr: u8 = d
+                        .get_item("address")?
+                        .map(|v| v.extract())
+                        .transpose()?
+                        .unwrap_or(0x20);
+                    let int_pin: Option<u8> =
+                        d.get_item("int_pin")?.map(|v| v.extract()).transpose()?;
+
+                    if let Ok(pcf) = i2c::Pcf8574::new(bus, addr, int_pin) {
+                        let r = self.running.clone();
+                        self.i2c_threads
+                            .push(std::thread::spawn(move || pcf.poll(r)));
                     }
                 }
             }
@@ -287,12 +390,21 @@ impl GpioCore {
                 let list = ads_list.downcast::<PyList>()?;
                 for item in list.iter() {
                     let d = item.downcast::<PyDict>()?;
-                    let bus: u8 = d.get_item("bus")?.map(|v| v.extract()).transpose()?.unwrap_or(1);
-                    let addr: u8 = d.get_item("address")?.map(|v| v.extract()).transpose()?.unwrap_or(0x48);
-                    
+                    let bus: u8 = d
+                        .get_item("bus")?
+                        .map(|v| v.extract())
+                        .transpose()?
+                        .unwrap_or(1);
+                    let addr: u8 = d
+                        .get_item("address")?
+                        .map(|v| v.extract())
+                        .transpose()?
+                        .unwrap_or(0x48);
+
                     if let Ok(ads) = i2c::Ads1115::new(bus, addr) {
                         let r = self.running.clone();
-                        self.i2c_threads.push(std::thread::spawn(move || ads.poll(r)));
+                        self.i2c_threads
+                            .push(std::thread::spawn(move || ads.poll(r)));
                     }
                 }
             }
@@ -331,62 +443,78 @@ fn parse_peripherals(config: &Bound<'_, PyDict>) -> PyResult<Vec<Peripheral>> {
     for item in list.iter() {
         let d = item.downcast::<PyDict>()?;
 
-        let name: String = d.get_item("name")?
+        let name: String = d
+            .get_item("name")?
             .map(|v| v.extract())
             .transpose()?
             .unwrap_or_default();
-        let device_index: usize = d.get_item("device_index")?
+        let device_index: usize = d
+            .get_item("device_index")?
             .map(|v| v.extract())
             .transpose()?
             .unwrap_or(0);
-        let type_str: String = d.get_item("type")?
+        let type_str: String = d
+            .get_item("type")?
             .map(|v| v.extract())
             .transpose()?
             .unwrap_or_default();
-        let command: String = d.get_item("command")?
+        let command: String = d
+            .get_item("command")?
             .map(|v| v.extract())
             .transpose()?
             .unwrap_or_default();
-        let pins: Vec<u8> = d.get_item("pins")?
+        let pins: Vec<u8> = d
+            .get_item("pins")?
             .map(|v| v.extract())
             .transpose()?
             .unwrap_or_default();
 
-        // Build 192-bit pin bitmask from pin list
-        let mut pin_mask: [u64; 3] = [0, 0, 0];
+        // Build 256-bit pin bitmask from pin list
+        let mut pin_mask: [u64; 4] = [0, 0, 0, 0];
         for &pin in &pins {
             let idx = (pin / 64) as usize;
-            if idx < 3 {
+            if idx < 4 {
                 pin_mask[idx] |= 1u64 << (pin % 64);
             }
         }
-        let pin_count = (pin_mask[0].count_ones() + pin_mask[1].count_ones() + pin_mask[2].count_ones()) as u8;
+        let pin_count = (pin_mask[0].count_ones()
+            + pin_mask[1].count_ones()
+            + pin_mask[2].count_ones()
+            + pin_mask[3].count_ones()) as u8;
 
         // Parse event type
         let event_type = match type_str.as_str() {
             "BUTTON" => EventType::Button {
                 evdev_code: command.parse::<u32>().map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err(
-                        format!("BUTTON '{name}' command must be an integer evdev code, got '{command}'")
-                    )
+                    pyo3::exceptions::PyValueError::new_err(format!(
+                        "BUTTON '{name}' command must be an integer evdev code, got '{command}'"
+                    ))
                 })?,
             },
             "KEY" => EventType::Key {
                 evdev_code: command.parse::<u32>().map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err(
-                        format!("KEY '{name}' command must be an integer evdev code, got '{command}'")
-                    )
+                    pyo3::exceptions::PyValueError::new_err(format!(
+                        "KEY '{name}' command must be an integer evdev code, got '{command}'"
+                    ))
                 })?,
             },
             "AXIS" => {
                 // command is "(evdev_type, evdev_code, press_value)" — same as reference
                 let (et, ec, pv) = parse_axis_command(&command, &name)?;
-                EventType::Axis { evdev_type: et, evdev_code: ec, press_value: pv }
+                EventType::Axis {
+                    evdev_type: et,
+                    evdev_code: ec,
+                    press_value: pv,
+                }
             }
-            "COMMAND" => EventType::Command { bash: command.clone() },
-            other => return Err(pyo3::exceptions::PyValueError::new_err(
-                format!("Unknown peripheral type '{other}' for '{name}'")
-            )),
+            "COMMAND" => EventType::Command {
+                bash: command.clone(),
+            },
+            other => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Unknown peripheral type '{other}' for '{name}'"
+                )))
+            }
         };
 
         result.push(Peripheral {
@@ -417,16 +545,19 @@ fn parse_axis_command(s: &str, name: &str) -> PyResult<(u32, u32, i32)> {
     let inner = s.trim().trim_start_matches('(').trim_end_matches(')');
     let parts: Vec<&str> = inner.split(',').collect();
     if parts.len() != 3 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            format!("AXIS '{name}' command must be '(type, code, value)', got '{s}'")
-        ));
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "AXIS '{name}' command must be '(type, code, value)', got '{s}'"
+        )));
     }
-    let et = parts[0].trim().parse::<u32>()
-        .map_err(|_| pyo3::exceptions::PyValueError::new_err(format!("AXIS '{name}' evdev_type not an int")))?;
-    let ec = parts[1].trim().parse::<u32>()
-        .map_err(|_| pyo3::exceptions::PyValueError::new_err(format!("AXIS '{name}' evdev_code not an int")))?;
-    let pv = parts[2].trim().parse::<i32>()
-        .map_err(|_| pyo3::exceptions::PyValueError::new_err(format!("AXIS '{name}' press_value not an int")))?;
+    let et = parts[0].trim().parse::<u32>().map_err(|_| {
+        pyo3::exceptions::PyValueError::new_err(format!("AXIS '{name}' evdev_type not an int"))
+    })?;
+    let ec = parts[1].trim().parse::<u32>().map_err(|_| {
+        pyo3::exceptions::PyValueError::new_err(format!("AXIS '{name}' evdev_code not an int"))
+    })?;
+    let pv = parts[2].trim().parse::<i32>().map_err(|_| {
+        pyo3::exceptions::PyValueError::new_err(format!("AXIS '{name}' press_value not an int"))
+    })?;
     Ok((et, ec, pv))
 }
 
@@ -437,6 +568,7 @@ fn parse_axis_command(s: &str, name: &str) -> PyResult<(u32, u32, i32)> {
 #[pymodule]
 fn gpionext_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(version, m)?)?;
+    m.add_function(wrap_pyfunction!(i2c_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(get_pin_states, m)?)?;
     m.add_class::<GpioCore>()?;
     Ok(())

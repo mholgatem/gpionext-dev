@@ -89,7 +89,7 @@ parser.add_argument('--debounce', metavar='1', default=1, type=int,
 parser.add_argument('--pulldown', dest='pulldown', default=False, action='store_true',
                     help='Use pulldown resistors instead of pullup (inherited from daemon)')
 parser.add_argument('--use_i2c', dest='use_i2c', default=False, action='store_true',
-                    help='Enable I2C hardware (MCP23017/ADS1115). (inherited from daemon)')
+                    help='Enable I2C hardware (MCP23017/ADS1115/PCF8574). (inherited from daemon)')
 parser.add_argument('--dev', dest='dev', default=False, action='store_true')
 parser.add_argument('--debug', dest='debug', default=False, action='store_true')
 
@@ -147,11 +147,23 @@ class ConfigurationManager:
         self._core = gpionext_core.GpioCore()
         try:
             config_dict = SQL.buildConfigDict(self.args)
+            if self._i2c_configured(config_dict) and not getattr(gpionext_core, 'i2c_enabled', lambda: False)():
+                print(pcolor('yellow', 'WARNING: gpionext_core was built without I2C support.'))
+                print(pcolor('yellow', 'Configured I2C virtual pins will be visible but inactive until the core is rebuilt with --features i2c.'))
             self._core.start_monitor(config_dict)
         except RuntimeError as exc:
             print(pcolor('yellow', f'WARNING: GPIO monitor failed to start: {exc}'))
             print(pcolor('yellow', 'Pin detection will be disabled.'))
             self._core = None
+
+
+    @staticmethod
+    def _i2c_configured(config_dict: dict) -> bool:
+        """Return True when the runtime config contains any I2C chip rows."""
+        return any(
+            config_dict.get(key)
+            for key in ('i2c_mcp23017', 'i2c_ads1115', 'i2c_pcf8574')
+        )
 
     def _signal_handler(self, sig: int, frame) -> None:
         """Clean exit on SIGTERM/SIGINT/SIGQUIT."""
@@ -276,7 +288,7 @@ class ConfigurationManager:
 
             if hold_start and (time.time() - hold_start) >= self.HOLD_SECONDS:
                 # Convert bitmask to pin list
-                return [bit for bit in range(192) if bitmask & (1 << bit)]
+                return [bit for bit in range(256) if bitmask & (1 << bit)]
 
     def wait_for_release(self) -> None:
         """Block until all GPIO pins are released. Prompts after 3 seconds."""
@@ -527,6 +539,7 @@ class ConfigurationManager:
                                          self._configure_baudrate, [menu], should_exit=True))
             menu.append_item(FunctionItem("Manage MCP23017 chips", self._manage_mcp23017, [menu], should_exit=True))
             menu.append_item(FunctionItem("Manage ADS1115 chips", self._manage_ads1115, [menu], should_exit=True))
+            menu.append_item(FunctionItem("Manage PCF8574 chips", self._manage_pcf8574, [menu], should_exit=True))
             
             menu.show(parent=parent)
             if menu.selected_option == -1 or menu.selected_item == menu.exit_item:
@@ -644,6 +657,71 @@ class ConfigurationManager:
             SQL._conn.commit()
             self._show_message('Delete ADS1115', 'Chip deleted.', parent=parent)
 
+
+    def _manage_pcf8574(self, parent: CursesMenu = None) -> None:
+        while True:
+            menu = CursesMenu("Manage PCF8574 Chips")
+            rows = SQL._cursor.execute('SELECT * FROM I2C_PCF8574').fetchall()
+            for row in rows:
+                int_pin = row['int_pin'] if row['int_pin'] else "None"
+                label = f"Bus {row['bus']}, Addr 0x{row['address']:02X}, Int Pin: {int_pin}"
+                menu.append_item(MenuItem(label))
+
+            menu.append_item(FunctionItem("Add new chip", self._add_pcf8574, [menu], should_exit=True))
+            if rows:
+                menu.append_item(FunctionItem("Delete a chip", self._delete_pcf8574_menu, [menu], should_exit=True))
+
+            menu.show(parent=parent)
+            if menu.selected_option == -1 or menu.selected_item == menu.exit_item:
+                break
+
+    def _choose_pcf8574_interrupt_pin(self, parent: CursesMenu = None) -> int | None:
+        """Choose whether to assign a PCF8574 interrupt pin via GPIO capture."""
+        selection = self._choose_action(
+            'PCF8574 interrupt pin',
+            ['No interrupt pin', 'Capture interrupt pin'],
+            parent=parent,
+        )
+        if selection != 1:
+            return None
+
+        self._show_status('Waiting for GPIO input', 'Hold one BOARD pin for PCF8574 interrupt')
+        pins = self.wait_for_pin()
+        if not pins:
+            self._show_message('Add PCF8574', 'Interrupt pin capture cancelled; chip will be added without one.', parent=parent)
+            return None
+        if len(pins) > 1:
+            self._show_message('Add PCF8574', 'Multiple pins were captured; chip will be added without an interrupt pin.', parent=parent)
+            self.wait_for_release()
+            return None
+
+        int_pin = pins[0]
+        self._show_status('Pin captured', f'PCF8574 interrupt pin: {int_pin}\nRelease all buttons to continue')
+        self.wait_for_release()
+        return int_pin
+
+    def _add_pcf8574(self, parent: CursesMenu = None) -> None:
+        try:
+            bus_str = self._text_input('Add PCF8574', 'I2C Bus:', default='1', parent=parent) or '1'
+            bus = int(bus_str)
+            addr_str = self._text_input('Add PCF8574', 'I2C Address (hex):', default='0x20', parent=parent) or '0x20'
+            addr = int(addr_str, 16)
+            int_pin = self._choose_pcf8574_interrupt_pin(parent=parent)
+            SQL._cursor.execute('INSERT INTO I2C_PCF8574 (bus, address, int_pin) VALUES (?,?,?)', (bus, addr, int_pin))
+            SQL._conn.commit()
+            self._show_message('Add PCF8574', 'Chip added.', parent=parent)
+        except ValueError:
+            self._show_message('Add PCF8574', 'Invalid input.', parent=parent)
+
+    def _delete_pcf8574_menu(self, parent: CursesMenu = None) -> None:
+        rows = SQL._cursor.execute('SELECT * FROM I2C_PCF8574').fetchall()
+        options = [f"Bus {row['bus']}, Addr 0x{row['address']:02X}" for row in rows]
+        selection = SelectionMenu.get_selection(options, "Select PCF8574 to delete", parent=parent)
+        if selection != -1:
+            SQL._cursor.execute('DELETE FROM I2C_PCF8574 WHERE id = ?', (rows[selection]['id'],))
+            SQL._conn.commit()
+            self._show_message('Delete PCF8574', 'Chip deleted.', parent=parent)
+
     # ---------------------------------------------------------------------------
     # Live pin monitor
     # ---------------------------------------------------------------------------
@@ -669,6 +747,12 @@ class ConfigurationManager:
                 addr = ads['address']
                 base_vpin = 128 + (addr - 0x48) * 4
                 pins_to_show.extend(range(base_vpin, base_vpin + 4))
+
+            pcf_chips = SQL._cursor.execute('SELECT address FROM I2C_PCF8574').fetchall()
+            for pcf in pcf_chips:
+                addr = pcf['address']
+                base_vpin = 192 + (addr - 0x20) * 8
+                pins_to_show.extend(range(base_vpin, base_vpin + 8))
 
         with LivePinView(pins_to_show, db_rows) as view:
             self._run_fullscreen_curses(view.run_in_window, parent=parent)
@@ -948,7 +1032,12 @@ class ConfigurationManager:
         """
         out = []
         for p in pins:
-            if p >= 128:
+            if p >= 192:
+                # PCF8574
+                addr = 0x20 + (p - 192) // 8
+                pin = (p - 192) % 8
+                out.append(f"i2c-0x{addr:02X}-P{pin}")
+            elif p >= 128:
                 # ADS1115
                 addr = 0x48 + (p - 128) // 4
                 ch = (p - 128) % 4

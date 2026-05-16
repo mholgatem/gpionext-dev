@@ -68,7 +68,7 @@ parser.add_argument('--pulldown',
 
 parser.add_argument('--use_i2c',
                     dest='use_i2c', default=False, action='store_true',
-                    help='Enable I2C hardware (MCP23017/ADS1115). Disables GPIO on pins 3 and 5.')
+                    help='Enable I2C hardware (MCP23017/ADS1115/PCF8574). Disables GPIO on pins 3 and 5.')
 
 parser.add_argument('--dev',
                     dest='dev', default=False, action='store_true',
@@ -120,6 +120,8 @@ class GPIOnext:
             print(warning)
 
         config_dict = SQL.buildConfigDict(self.args)
+        if self._i2c_configured(config_dict) and not getattr(gpionext_core, 'i2c_enabled', lambda: False)():
+            self.log('WARNING: I2C chips are configured, but gpionext_core was built without I2C support; virtual I2C pins will remain inactive.')
         self.log(f'Starting GPIOnext core with {len(config_dict["peripherals"])} peripherals')
 
         self._core = gpionext_core.GpioCore()
@@ -131,6 +133,8 @@ class GPIOnext:
         self.log('Received SIGHUP — reloading configuration')
         if self._core:
             config_dict = SQL.buildConfigDict(self.args)
+            if self._i2c_configured(config_dict) and not getattr(gpionext_core, 'i2c_enabled', lambda: False)():
+                self.log('WARNING: I2C chips are configured, but gpionext_core was built without I2C support; virtual I2C pins will remain inactive.')
             self._core.reload(config_dict)
         self.log('Reload complete')
 
@@ -155,6 +159,15 @@ class GPIOnext:
     # ---------------------------------------------------------------------------
     # Helpers
     # ---------------------------------------------------------------------------
+
+
+    @staticmethod
+    def _i2c_configured(config_dict: dict) -> bool:
+        """Return True when the runtime config contains any I2C chip rows."""
+        return any(
+            config_dict.get(key)
+            for key in ('i2c_mcp23017', 'i2c_ads1115', 'i2c_pcf8574')
+        )
 
     def _normalise_args(self, args: argparse.Namespace) -> argparse.Namespace:
         """
