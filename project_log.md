@@ -1,7 +1,7 @@
 # Project Log
 
 ## Status
-Active — PCF8574 support has been added alongside MCP23017 and ADS1115, including SQL config, curses management UI, virtual pin mapping, Rust polling, and live-pin labels.
+Active — I2C chip configuration changes in the curses UI now restart the in-process GPIO monitor immediately so virtual MCP23017, ADS1115, and PCF8574 pins become available without restarting the config manager.
 
 ## Last Updated
 2026-05-16
@@ -9,7 +9,7 @@ Active — PCF8574 support has been added alongside MCP23017 and ADS1115, includ
 ## Current Architecture
 - `python/ui/config_manager.py` provides the interactive GPIOnext configuration UI.
 - The UI is built around the vendored `cursesmenu` package (`CursesMenu`, `SelectionMenu`, and `MultiSelect`) for menu navigation.
-- GPIO pin detection flows through `gpionext_core` when available, with `ConfigurationManager.wait_for_pin()` polling pin states and `wait_for_release()` blocking until release.
+- GPIO pin detection flows through `gpionext_core` when available, with `ConfigurationManager.wait_for_pin()` polling pin states and `wait_for_release()` blocking until release. `ConfigurationManager._restart_gpio_monitor()` stops and recreates this core after I2C hardware rows change.
 - GPIO capture UI is centralized through `_capture_pins()`, which now treats an empty pin list as cancellation/unavailability and lets callers abort cleanly before database writes.
 - Configuration data is persisted through `config.SQL`, including device mappings, command mappings, MCP23017/ADS1115/PCF8574 I2C chip configuration, and JSON import/export.
 - Stored DB `pins` values are parsed through shared `config.SQL` helpers so single pins, tuple/list combos, and MCP23017 (`i2c-0x20-A0`), ADS1115 (`i2c-0x48-ch0`), and PCF8574 (`i2c-0x20-P0`) virtual I2C strings are handled without `eval`.
@@ -49,6 +49,7 @@ Active — PCF8574 support has been added alongside MCP23017 and ADS1115, includ
 - [x] Implemented the Rust `Pcf8574` I2C driver using direct byte reads/writes instead of MCP23017 register access.
 - [x] Added PCF8574 management menus and live-pin display labels beside existing MCP23017 and ADS1115 UI support.
 - [x] Added unit coverage for PCF8574 pin IDs, virtual mapping, available I2C pin listing, and config export.
+- [x] Added a shared config UI GPIO monitor restart helper and wired MCP23017, ADS1115, and PCF8574 add/delete actions to reload the active hardware config immediately.
 
 ## Known Issues & Lessons Learned
 - Seeing configured virtual I2C pins in the UI does not prove Rust I2C polling is active; the release workflow previously built `gpionext_core` with `--features gpio`, so I2C poller code was compiled out and all virtual I2C pins stayed inactive. Future I2C changes must verify `cargo check --features i2c` and release/maturin feature flags.
@@ -70,4 +71,5 @@ Active — PCF8574 support has been added alongside MCP23017 and ADS1115, includ
 - Full-screen curses tools can redefine shared color-pair IDs; callers must reset parent menu color pairs before redrawing or normal menu text can inherit tool-specific colors.
 - GPIO core polling can raise runtime exceptions after the capture prompt is displayed; catch those exceptions at the polling boundary and show an acknowledgement dialog instead of allowing a traceback to flash and disappear.
 - Transient curses status screens should tolerate `curses.error` because narrow/small terminals can otherwise abort an input-capture workflow before a persistent error message is shown.
+- I2C hardware management writes update SQL immediately, but the already-running `gpionext_core` monitor must be restarted after each successful add/delete or newly configured virtual pins remain stale until the config manager restarts.
 
