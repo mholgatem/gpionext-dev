@@ -137,25 +137,55 @@ class ConfigurationManager:
         subprocess.call(('systemctl', 'stop', 'gpionext'))
         time.sleep(0.5)
 
-    def _start_gpio_monitor(self) -> None:
+    def _start_gpio_monitor(self, *, quiet: bool = False) -> bool:
         """
         Start a lightweight GPIO monitor (no uinput) so wait_for_pin() works.
         Falls back to a no-op stub if gpionext_core is unavailable.
+
+        Returns:
+            bool: True when the monitor starts successfully; False otherwise.
         """
         if not _HAS_CORE:
-            return
+            return False
         self._core = gpionext_core.GpioCore()
         try:
             config_dict = SQL.buildConfigDict(self.args)
             if self._i2c_configured(config_dict) and not getattr(gpionext_core, 'i2c_enabled', lambda: False)():
-                print(pcolor('yellow', 'WARNING: gpionext_core was built without I2C support.'))
-                print(pcolor('yellow', 'Configured I2C virtual pins will be visible but inactive until the core is rebuilt with --features i2c.'))
+                if not quiet:
+                    print(pcolor('yellow', 'WARNING: gpionext_core was built without I2C support.'))
+                    print(pcolor('yellow', 'Configured I2C virtual pins will be visible but inactive until the core is rebuilt with --features i2c.'))
             self._core.start_monitor(config_dict)
+            return True
         except RuntimeError as exc:
-            print(pcolor('yellow', f'WARNING: GPIO monitor failed to start: {exc}'))
-            print(pcolor('yellow', 'Pin detection will be disabled.'))
+            if not quiet:
+                print(pcolor('yellow', f'WARNING: GPIO monitor failed to start: {exc}'))
+                print(pcolor('yellow', 'Pin detection will be disabled.'))
             self._core = None
+            return False
 
+    def _restart_gpio_monitor(self, parent: CursesMenu = None) -> None:
+        """Restart the GPIO monitor so changed I2C hardware rows are active."""
+        if self._core:
+            try:
+                self._core.stop()
+            except RuntimeError as exc:
+                self._core = None
+                self._show_message(
+                    'GPIO monitor restart',
+                    f'Hardware settings were saved, but the monitor failed to stop: {exc}\n'
+                    'Pin detection may be stale until the configuration manager is restarted.',
+                    parent=parent,
+                )
+                return
+
+        self._core = None
+        if not self._start_gpio_monitor(quiet=True):
+            self._show_message(
+                'GPIO monitor restart',
+                'Hardware settings were saved, but the GPIO monitor could not restart.\n'
+                'Pin detection will be disabled until the monitor is restarted.',
+                parent=parent,
+            )
 
     @staticmethod
     def _i2c_configured(config_dict: dict) -> bool:
@@ -607,6 +637,7 @@ class ConfigurationManager:
             int_pin = self._choose_mcp23017_interrupt_pin(parent=parent)
             SQL._cursor.execute('INSERT INTO I2C_MCP23017 (bus, address, int_pin) VALUES (?,?,?)', (bus, addr, int_pin))
             SQL._conn.commit()
+            self._restart_gpio_monitor(parent=parent)
             self._show_message('Add MCP23017', 'Chip added.', parent=parent)
         except ValueError:
             self._show_message('Add MCP23017', 'Invalid input.', parent=parent)
@@ -618,6 +649,7 @@ class ConfigurationManager:
         if selection != -1:
             SQL._cursor.execute('DELETE FROM I2C_MCP23017 WHERE id = ?', (rows[selection]['id'],))
             SQL._conn.commit()
+            self._restart_gpio_monitor(parent=parent)
             self._show_message('Delete MCP23017', 'Chip deleted.', parent=parent)
 
     def _manage_ads1115(self, parent: CursesMenu = None) -> None:
@@ -644,6 +676,7 @@ class ConfigurationManager:
             addr = int(addr_str, 16)
             SQL._cursor.execute('INSERT INTO I2C_ADS1115 (bus, address) VALUES (?,?)', (bus, addr))
             SQL._conn.commit()
+            self._restart_gpio_monitor(parent=parent)
             self._show_message('Add ADS1115', 'Chip added.', parent=parent)
         except ValueError:
             self._show_message('Add ADS1115', 'Invalid input.', parent=parent)
@@ -655,6 +688,7 @@ class ConfigurationManager:
         if selection != -1:
             SQL._cursor.execute('DELETE FROM I2C_ADS1115 WHERE id = ?', (rows[selection]['id'],))
             SQL._conn.commit()
+            self._restart_gpio_monitor(parent=parent)
             self._show_message('Delete ADS1115', 'Chip deleted.', parent=parent)
 
 
@@ -709,6 +743,7 @@ class ConfigurationManager:
             int_pin = self._choose_pcf8574_interrupt_pin(parent=parent)
             SQL._cursor.execute('INSERT INTO I2C_PCF8574 (bus, address, int_pin) VALUES (?,?,?)', (bus, addr, int_pin))
             SQL._conn.commit()
+            self._restart_gpio_monitor(parent=parent)
             self._show_message('Add PCF8574', 'Chip added.', parent=parent)
         except ValueError:
             self._show_message('Add PCF8574', 'Invalid input.', parent=parent)
@@ -720,6 +755,7 @@ class ConfigurationManager:
         if selection != -1:
             SQL._cursor.execute('DELETE FROM I2C_PCF8574 WHERE id = ?', (rows[selection]['id'],))
             SQL._conn.commit()
+            self._restart_gpio_monitor(parent=parent)
             self._show_message('Delete PCF8574', 'Chip deleted.', parent=parent)
 
     # ---------------------------------------------------------------------------
