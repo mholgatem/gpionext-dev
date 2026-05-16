@@ -36,8 +36,8 @@ libc = "0.2"
 default = []
 # gpio: enables the gpiocdev event loop (Phase 2)
 gpio = ["dep:gpiocdev"]
-# i2c: enables MCP23017 + ADS1115 drivers (Phase 3)
-i2c = ["dep:i2cdev", "dep:gpiocdev"]
+# i2c: enables MCP23017 + ADS1115 + PCF8574 drivers (Phase 3)
+i2c = ["dep:i2cdev", "gpio"]
 
 [profile.release]
 # Strip debug symbols for smaller .so shipped in GitHub Releases

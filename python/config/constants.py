@@ -93,9 +93,24 @@ def ads1115_pin_id(address: int, channel: int) -> str:
     return f"i2c-0x{address:02X}-ch{channel}"
 
 
+def pcf8574_pin_id(address: int, pin: int) -> str:
+    """
+    Build the canonical string ID for a PCF8574 digital I/O pin.
+
+    Parameters:
+        address (int): i2c address of the chip (0x20-0x27)
+        pin     (int): 0-7
+
+    Returns:
+        str: e.g. 'i2c-0x20-P0'
+    """
+    return f"i2c-0x{address:02X}-P{pin}"
+
+
 def available_i2c_pins(
     mcp23017_addresses: list[int] | None = None,
     ads1115_addresses: list[int] | None = None,
+    pcf8574_addresses: list[int] | None = None,
 ) -> list[str]:
     """
     Return a list of all i2c pin IDs for connected chips.
@@ -104,6 +119,7 @@ def available_i2c_pins(
     Parameters:
         mcp23017_addresses (list[int]): detected MCP23017 i2c addresses
         ads1115_addresses  (list[int]): detected ADS1115 i2c addresses
+        pcf8574_addresses  (list[int]): detected PCF8574 i2c addresses
 
     Returns:
         list[str]: sorted list of pin ID strings
@@ -116,6 +132,9 @@ def available_i2c_pins(
     for addr in (ads1115_addresses or []):
         for ch in range(4):
             pins.append(ads1115_pin_id(addr, ch))
+    for addr in (pcf8574_addresses or []):
+        for pin in range(8):
+            pins.append(pcf8574_pin_id(addr, pin))
     return pins
 
 # ---------------------------------------------------------------------------
