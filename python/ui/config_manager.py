@@ -473,11 +473,11 @@ class ConfigurationManager:
 
     def _edit_command(self, row: dict, parent: CursesMenu = None) -> None:
         """Edit an existing command row (name, command string, or pin)."""
-        name = self._text_input('Edit command', 'Name:', default=row['name'], parent=parent)
+        name = self._text_input('Edit command', 'Name', default=row['name'], parent=parent)
         if name is None:
             return
         name = name or row['name']
-        cmd = self._text_input('Edit command', 'Command:', default=row['command'], parent=parent)
+        cmd = self._text_input('Edit command', 'Command', default=row['command'], parent=parent)
         if cmd is None:
             return
         cmd = cmd or row['command']
@@ -630,9 +630,9 @@ class ConfigurationManager:
 
     def _add_mcp23017(self, parent: CursesMenu = None) -> None:
         try:
-            bus_str = self._text_input('Add MCP23017', 'I2C Bus:', default='1', parent=parent) or '1'
+            bus_str = self._text_input('Add MCP23017', 'I2C Bus', default='1', parent=parent) or '1'
             bus = int(bus_str)
-            addr_str = self._text_input('Add MCP23017', 'I2C Address (hex):', default='0x20', parent=parent) or '0x20'
+            addr_str = self._text_input('Add MCP23017', 'I2C Address (hex)', default='0x20', parent=parent) or '0x20'
             addr = int(addr_str, 16)
             int_pin = self._choose_mcp23017_interrupt_pin(parent=parent)
             SQL._cursor.execute('INSERT INTO I2C_MCP23017 (bus, address, int_pin) VALUES (?,?,?)', (bus, addr, int_pin))
@@ -670,9 +670,9 @@ class ConfigurationManager:
 
     def _add_ads1115(self, parent: CursesMenu = None) -> None:
         try:
-            bus_str = self._text_input('Add ADS1115', 'I2C Bus:', default='1', parent=parent) or '1'
+            bus_str = self._text_input('Add ADS1115', 'I2C Bus', default='1', parent=parent) or '1'
             bus = int(bus_str)
-            addr_str = self._text_input('Add ADS1115', 'I2C Address (hex):', default='0x48', parent=parent) or '0x48'
+            addr_str = self._text_input('Add ADS1115', 'I2C Address (hex)', default='0x48', parent=parent) or '0x48'
             addr = int(addr_str, 16)
             SQL._cursor.execute('INSERT INTO I2C_ADS1115 (bus, address) VALUES (?,?)', (bus, addr))
             SQL._conn.commit()
@@ -736,9 +736,9 @@ class ConfigurationManager:
 
     def _add_pcf8574(self, parent: CursesMenu = None) -> None:
         try:
-            bus_str = self._text_input('Add PCF8574', 'I2C Bus:', default='1', parent=parent) or '1'
+            bus_str = self._text_input('Add PCF8574', 'I2C Bus', default='1', parent=parent) or '1'
             bus = int(bus_str)
-            addr_str = self._text_input('Add PCF8574', 'I2C Address (hex):', default='0x20', parent=parent) or '0x20'
+            addr_str = self._text_input('Add PCF8574', 'I2C Address (hex)', default='0x20', parent=parent) or '0x20'
             addr = int(addr_str, 16)
             int_pin = self._choose_pcf8574_interrupt_pin(parent=parent)
             SQL._cursor.execute('INSERT INTO I2C_PCF8574 (bus, address, int_pin) VALUES (?,?,?)', (bus, addr, int_pin))
@@ -838,7 +838,7 @@ class ConfigurationManager:
     def _export_config(self) -> None:
         """Export the full config database to a JSON file."""
         default_path = '/opt/gpionext/config_backup.json'
-        path = self._text_input('Export config', 'Export path:', default=default_path) or default_path
+        path = self._text_input('Export config', 'Export path', default=default_path) or default_path
         try:
             data = SQL.exportToJson()
             with open(path, 'w') as f:
@@ -952,7 +952,7 @@ class ConfigurationManager:
         """Temporarily leave curses mode, read one line, then restore the menu."""
         active_menu = parent or CursesMenu.currently_active_menu
         had_curses = CursesMenu.stdscr is not None
-        suffix = f" [{default}]" if default else ""
+        suffix = f" [default: {default}]:" if default else ""
 
         try:
             if had_curses:
