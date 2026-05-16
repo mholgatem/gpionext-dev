@@ -148,7 +148,7 @@ def _is_i2c_pin_string(value: str) -> bool:
     pin = parts[2]
     if pin.startswith('ch'):
         return pin[2:].isdigit()
-    return len(pin) >= 2 and pin[0] in ('A', 'B') and pin[1:].isdigit()
+    return len(pin) >= 2 and pin[0] in ('A', 'B', 'P') and pin[1:].isdigit()
 
 # ---------------------------------------------------------------------------
 # Initialisation
@@ -197,6 +197,14 @@ def init(db_path: str | None = None) -> None:
         '  id       INTEGER PRIMARY KEY AUTOINCREMENT,'
         '  bus      INTEGER DEFAULT 1,'
         '  address  INTEGER DEFAULT 72'
+        ')'
+    )
+    _cursor.execute(
+        'CREATE TABLE IF NOT EXISTS I2C_PCF8574 ('
+        '  id       INTEGER PRIMARY KEY AUTOINCREMENT,'
+        '  bus      INTEGER DEFAULT 1,'
+        '  address  INTEGER DEFAULT 32,'
+        '  int_pin  INTEGER'
         ')'
     )
     _conn.commit()
@@ -444,14 +452,17 @@ def buildConfigDict(args) -> dict:
     if use_i2c:
         mcp_list = _cursor.execute('SELECT bus, address, int_pin FROM I2C_MCP23017').fetchall()
         ads_list = _cursor.execute('SELECT bus, address FROM I2C_ADS1115').fetchall()
+        pcf_list = _cursor.execute('SELECT bus, address, int_pin FROM I2C_PCF8574').fetchall()
     else:
         mcp_list = []
         ads_list = []
+        pcf_list = []
 
     return {
         'peripherals':     peripherals,
         'i2c_mcp23017':    mcp_list,
         'i2c_ads1115':     ads_list,
+        'i2c_pcf8574':     pcf_list,
         'combo_delay':     int(getattr(args, 'combo_delay', 50)),
         'key_hold_delay':  int(getattr(args, 'key_hold_delay', 350)),
         'debounce':        int(getattr(args, 'debounce', 1)),
@@ -466,6 +477,7 @@ def _map_i2c_pin_string_to_vpin(s: str) -> int:
     Map a string like 'i2c-0x20-A0' to its virtual BOARD pin number.
     MCP23017: 64 + (addr-0x20)*16 + (0 if A else 8) + bit
     ADS1115: 128 + (addr-0x48)*4 + channel
+    PCF8574: 192 + (addr-0x20)*8 + pin
     """
     parts = s.split('-')
     addr = int(parts[1], 16)
@@ -473,11 +485,15 @@ def _map_i2c_pin_string_to_vpin(s: str) -> int:
         # ADS1115
         channel = int(parts[2][2:])
         return 128 + (addr - 0x48) * 4 + channel
-    else:
-        # MCP23017
-        port = 0 if parts[2][0] == 'A' else 8
-        bit = int(parts[2][1:])
-        return 64 + (addr - 0x20) * 16 + port + bit
+    if parts[2].startswith('P'):
+        # PCF8574
+        pin = int(parts[2][1:])
+        return 192 + (addr - 0x20) * 8 + pin
+
+    # MCP23017
+    port = 0 if parts[2][0] == 'A' else 8
+    bit = int(parts[2][1:])
+    return 64 + (addr - 0x20) * 16 + port + bit
 
 
 # ---------------------------------------------------------------------------

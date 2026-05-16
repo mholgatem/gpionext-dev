@@ -68,7 +68,7 @@ parser.add_argument('--pulldown',
 
 parser.add_argument('--use_i2c',
                     dest='use_i2c', default=False, action='store_true',
-                    help='Enable I2C hardware (MCP23017/ADS1115). Disables GPIO on pins 3 and 5.')
+                    help='Enable I2C hardware (MCP23017/ADS1115/PCF8574). Disables GPIO on pins 3 and 5.')
 
 parser.add_argument('--dev',
                     dest='dev', default=False, action='store_true',
