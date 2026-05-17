@@ -83,7 +83,16 @@ case "$1" in
 
 "UPDATE")
     echo -e "${CYAN}Starting update...${NONE}"
-    sudo bash "${INSTALL_PATH}/update.sh"
+    # Fetch the bootstrap installer and run it with all passed arguments
+    curl -sfL https://raw.githubusercontent.com/mholgatem/gpionext-dev/main/install.sh | sudo bash -s -- "$@"
+    ;;
+
+"REMOVE")
+    if [ -f "${INSTALL_PATH}/remove.sh" ]; then
+        sudo bash "${INSTALL_PATH}/remove.sh"
+    else
+        echo -e "${RED}Error: remove.sh not found at ${INSTALL_PATH}/remove.sh${NONE}"
+    fi
     ;;
 
 # ── Configuration ──────────────────────────────────────────────────────────
@@ -256,6 +265,7 @@ ${CYAN}${BOLD:-}GPIOnext Commands${NONE}
   ${CYAN}gpionext journal${NONE}             Stream daemon log output
   ${CYAN}gpionext test [1-4]${NONE}          Test a virtual joypad with jstest
   ${CYAN}gpionext update${NONE}              Pull latest source and binary
+  ${CYAN}gpionext remove${NONE}              Completely remove GPIOnext from the system
 
 ${CYAN}Settings (all restart the daemon):${NONE}
 

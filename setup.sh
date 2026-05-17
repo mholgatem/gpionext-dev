@@ -150,22 +150,19 @@ shopt -u nocasematch
 
 echo -e "${CYAN}${UNDERLINE}Installing system dependencies...${NONE}"
 
+# Install packages from apt-packages.txt
+if [ -f "${SCRIPTPATH}/apt-packages.txt" ]; then
+    xargs -a "${SCRIPTPATH}/apt-packages.txt" apt-get -y install
+else
+    echo -e "${RED}Warning: apt-packages.txt not found. Skipping batch install.${NONE}"
+fi
+
 # Core deps (libgpiod soname changed: libgpiod2 on Bullseye, libgpiod3 on Bookworm+)
 LIBGPIOD_RT="libgpiod2"
 if $IS_BOOKWORM; then
     LIBGPIOD_RT="libgpiod3"
 fi
-
-apt-get -y install \
-    python3 python3-dev python3-venv \
-    sqlite3 joystick \
-    "${LIBGPIOD_RT}" libgpiod-dev \
-    libi2c-dev \
-    curl \
-    gcc
-
-# evdev Python package via apt (avoids pip breakage)
-apt-get -y install python3-evdev python3-smbus2 || true
+apt-get -y install "${LIBGPIOD_RT}"
 
 # GPIO library: rpi-lgpio for Bookworm+ (Pi 5 compatible), RPi.GPIO for older
 if $IS_BOOKWORM; then
@@ -178,20 +175,11 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Create install directory and copy source
+# Create install directory
 # ---------------------------------------------------------------------------
 
-echo -e "${CYAN}${UNDERLINE}Installing to ${INSTALL_PATH}...${NONE}"
+echo -e "${CYAN}${UNDERLINE}Setting up directory structure at ${INSTALL_PATH}...${NONE}"
 mkdir -p "${INSTALL_PATH}/config"
-
-# Copy source to install path, excluding .git
-# We use rsync if available for cleaner exclusion, otherwise cp
-if hash rsync 2>/dev/null; then
-    rsync -a --exclude=".git" "${SCRIPTPATH}/" "${INSTALL_PATH}/"
-else
-    cp -r "${SCRIPTPATH}/." "${INSTALL_PATH}/"
-    rm -rf "${INSTALL_PATH}/.git"
-fi
 
 # ---------------------------------------------------------------------------
 # Python virtualenv
@@ -200,12 +188,14 @@ fi
 echo -e "${CYAN}${UNDERLINE}Creating Python virtualenv...${NONE}"
 python3 -m venv "${INSTALL_PATH}/venv"
 
-# Activate venv and install Python packages not available via apt
+# Activate venv and install Python packages
 "${INSTALL_PATH}/venv/bin/pip" install --quiet --upgrade pip
 
-# Try apt-installed evdev first; if not available in venv, pip install it
-"${INSTALL_PATH}/venv/bin/pip" install --quiet evdev 2>/dev/null || true
-"${INSTALL_PATH}/venv/bin/pip" install --quiet smbus2 2>/dev/null || true
+if [ -f "${SCRIPTPATH}/requirements.txt" ]; then
+    "${INSTALL_PATH}/venv/bin/pip" install --quiet -r "${SCRIPTPATH}/requirements.txt"
+else
+    echo -e "${RED}Warning: requirements.txt not found. Skipping pip install.${NONE}"
+fi
 
 # ---------------------------------------------------------------------------
 # Download pre-built Rust extension binary from GitHub Releases

@@ -73,7 +73,7 @@ for rg_file in /etc/rc.local /home/pi/.profile; do
     if [ -f "$rg_file" ] && grep -q "retrogame" "$rg_file"; then
         echo
         echo -e "${CYAN}retrogame detected in ${rg_file}.${NONE}"
-        read -rp "Re-enable retrogame on startup? [y/N] " USER_INPUT
+        read -rp "Re-enable retrogame on startup? [y/n] " USER_INPUT
         if [[ "$USER_INPUT" =~ ^[Yy] ]]; then
             sed -i '/retrogame/s/^: #//' "$rg_file"
             echo -e "${CYAN}retrogame re-enabled.${NONE}"
